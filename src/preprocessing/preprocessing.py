@@ -3,7 +3,7 @@ import re
 import json
 import pandas as pd
 import natsort
-from src.config.config import UNZIP_DIR, REFINED_JSON_PATH
+from src.config.config import UNZIP_DIR, REFINED_JSON_PATH  # This is a full path like './data/enron_output.json'
 from src.config.logging_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -35,12 +35,11 @@ def parse_single_email(email_text, file_path):
                         body_start_index = i + 1
 
         if body_start_index is None or body_start_index >= len(lines):
-            raise ValueError(f"Could not determine body start in {file_path}")
-
-        body_lines = lines[body_start_index:]
-        body_text = "\n".join(body_lines).strip()
-        if not body_text:
-            raise ValueError(f"Empty email body in {file_path}")
+            logger.warning(f"No body found in: {file_path}")
+            body_text = ""
+        else:
+            body_lines = lines[body_start_index:]
+            body_text = "\n".join(body_lines).strip()
 
         from_blocks = [m.start() for m in re.finditer(r'^From: .*', body_text, re.MULTILINE)]
         reply_chains = []
@@ -56,7 +55,7 @@ def parse_single_email(email_text, file_path):
 
         record = {key: headers.get(key, "") for key in HEADER_KEYS}
         record["Body"] = main_body.replace('"""', '""')
-        record["SourceFile"] = os.path.basename(file_path)  # Use just the filename
+        record["SourceFile"] = os.path.basename(file_path)
 
         for idx, reply in enumerate(reply_chains):
             record[f"ReplyChain{idx + 1}"] = reply.replace('"""', '""')
@@ -70,7 +69,21 @@ def parse_single_email(email_text, file_path):
         logger.error(f"Error parsing email in {file_path}: {e}")
         raise
 
-def extract_emails_to_json(output_path, batch_size=50):
+def generate_unique_json_path(base_path):
+    if not os.path.exists(base_path):
+        return base_path
+
+    base, ext = os.path.splitext(base_path)
+    i = 1
+    while True:
+        new_path = f"{base}_{i}{ext}"
+        if not os.path.exists(new_path):
+            return new_path
+        i += 1
+
+def extract_emails_to_json(base_output_path, batch_size=50):
+    output_path = generate_unique_json_path(base_output_path)
+
     all_files = []
     file_map = {}
 
@@ -88,24 +101,7 @@ def extract_emails_to_json(output_path, batch_size=50):
     sorted_file_names = natsort.natsorted(file_map.keys())
     batch_files = [file_map[name] for name in sorted_file_names[:batch_size]]
 
-    # Load existing JSON to skip already processed files
-    existing_data = []
-    processed_filenames = set()
-    if os.path.exists(output_path):
-        try:
-            with open(output_path, 'r', encoding='utf-8') as f:
-                existing_data = json.load(f)
-                processed_filenames = {
-                    os.path.basename(email["SourceFile"]) for email in existing_data if "SourceFile" in email
-                }
-            logger.info(f"Loaded {len(existing_data)} existing records")
-        except Exception as e:
-            logger.error(f"Failed to load existing JSON: {e}")
-            return
-
-    # Filter batch files by name
-    batch_files = [fp for fp in batch_files if os.path.basename(fp) not in processed_filenames]
-    logger.info(f"{len(batch_files)} new files to process after deduplication")
+    logger.info(f"Processing {len(batch_files)} files. Output: {os.path.basename(output_path)}")
 
     new_records = []
     for file_path in batch_files:
@@ -120,17 +116,16 @@ def extract_emails_to_json(output_path, batch_size=50):
             raise RuntimeError(f"Aborting due to error in {file_path}")
 
     if not new_records:
-        logger.info("No new records to add. JSON is up to date.")
+        logger.info("No records found. No JSON created.")
         return
 
-    # Combine and write back to JSON
-    combined_data = existing_data + new_records
     try:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(combined_data, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved total {len(combined_data)} records to '{output_path}'")
+            json.dump(new_records, f, indent=2, ensure_ascii=False)
+        logger.info(f"✅ Saved {len(new_records)} records to: {output_path}")
     except Exception as e:
-        logger.error(f"Error writing updated JSON: {e}")
+        logger.error(f"❌ Error writing new JSON file: {e}")
 
 if __name__ == "__main__":
-    extract_emails_to_json(REFINED_JSON_PATH, batch_size=100)
+    extract_emails_to_json(REFINED_JSON_PATH, batch_size=1000)
