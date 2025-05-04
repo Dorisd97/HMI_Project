@@ -1,8 +1,9 @@
 import os
 import re
+import json
 import pandas as pd
 import natsort
-from src.config.config import UNZIP_DIR, REFINED_CSV_PATH
+from src.config.config import UNZIP_DIR, REFINED_JSON_PATH
 from src.config.logging_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -55,7 +56,7 @@ def parse_single_email(email_text, file_path):
 
         record = {key: headers.get(key, "") for key in HEADER_KEYS}
         record["Body"] = main_body.replace('"""', '""')
-        record["SourceFile"] = os.path.basename(file_path)  # ✔️ Use filename only
+        record["SourceFile"] = os.path.basename(file_path)  # Use just the filename
 
         for idx, reply in enumerate(reply_chains):
             record[f"ReplyChain{idx + 1}"] = reply.replace('"""', '""')
@@ -69,7 +70,7 @@ def parse_single_email(email_text, file_path):
         logger.error(f"Error parsing email in {file_path}: {e}")
         raise
 
-def extract_emails_to_csv(output_path, batch_size=50):
+def extract_emails_to_json(output_path, batch_size=50):
     all_files = []
     file_map = {}
 
@@ -87,47 +88,49 @@ def extract_emails_to_csv(output_path, batch_size=50):
     sorted_file_names = natsort.natsorted(file_map.keys())
     batch_files = [file_map[name] for name in sorted_file_names[:batch_size]]
 
-    existing_df = pd.DataFrame()
+    # Load existing JSON to skip already processed files
+    existing_data = []
     processed_filenames = set()
     if os.path.exists(output_path):
         try:
-            existing_df = pd.read_csv(output_path, dtype=str)
-            processed_filenames = set(
-                os.path.basename(name) for name in existing_df["SourceFile"].dropna().unique()
-            )
-            logger.info(f"Loaded {len(existing_df)} existing rows from CSV")
+            with open(output_path, 'r', encoding='utf-8') as f:
+                existing_data = json.load(f)
+                processed_filenames = {
+                    os.path.basename(email["SourceFile"]) for email in existing_data if "SourceFile" in email
+                }
+            logger.info(f"Loaded {len(existing_data)} existing records")
         except Exception as e:
-            logger.error(f"Error reading existing CSV: {e}")
+            logger.error(f"Failed to load existing JSON: {e}")
             return
 
-    # ✔️ Filter out files based on just the filename
+    # Filter batch files by name
     batch_files = [fp for fp in batch_files if os.path.basename(fp) not in processed_filenames]
     logger.info(f"{len(batch_files)} new files to process after deduplication")
 
-    all_records = []
+    new_records = []
     for file_path in batch_files:
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
                 record = parse_single_email(content, file_path)
-                all_records.append(record)
+                new_records.append(record)
                 logger.info(f"Parsed: {file_path}")
         except Exception as e:
             logger.error(f"Critical error in {file_path}: {e}")
             raise RuntimeError(f"Aborting due to error in {file_path}")
 
-    if not all_records:
-        logger.info("No new records to add. CSV is up to date.")
+    if not new_records:
+        logger.info("No new records to add. JSON is up to date.")
         return
 
-    new_df = pd.DataFrame(all_records)
-    combined_df = pd.concat([existing_df, new_df], ignore_index=True).fillna("")
-
+    # Combine and write back to JSON
+    combined_data = existing_data + new_records
     try:
-        combined_df.to_csv(output_path, index=False, quoting=1, escapechar='\\', lineterminator='\n')
-        logger.info(f"Updated CSV with total {len(combined_df)} records at '{output_path}'")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(combined_data, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved total {len(combined_data)} records to '{output_path}'")
     except Exception as e:
-        logger.error(f"Error writing updated CSV: {e}")
+        logger.error(f"Error writing updated JSON: {e}")
 
 if __name__ == "__main__":
-    extract_emails_to_csv(REFINED_CSV_PATH, batch_size=100)
+    extract_emails_to_json(REFINED_JSON_PATH, batch_size=100)
