@@ -1,48 +1,49 @@
 import os
-import zipfile
 import hashlib
+import logging
+from src.config.config import LOG_FILE_PATH
+from src.preprocessing.dataset_setup import unzip_once
 
-# Step 1: Unzip the file
-zip_path = 'D:/Projects/HMI/HMI_Project/data/Enron.zip'
-unzip_dir = 'D:/Projects/HMI/HMI_Project/data/enron_data'
+# Setup logging to 'log/duplicates_process_log.txt' under project root
+LOGGING_PATH = os.path.join(os.path.dirname(LOG_FILE_PATH), 'duplicates_process_log.txt')
+os.makedirs(os.path.dirname(LOGGING_PATH), exist_ok=True)
 
-if not os.path.exists(unzip_dir):
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(unzip_dir)
+logging.basicConfig(
+    filename=LOGGING_PATH,
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Step 1: Ensure dataset is unzipped
+UNZIP_DIR = unzip_once()
 
 # Step 2: Read all .txt files and compute their hashes
 file_hashes = {}
-
-for root, dirs, files in os.walk(unzip_dir):
+for root, dirs, files in os.walk(UNZIP_DIR):
     for file in files:
         if file.endswith('.txt'):
             file_path = os.path.join(root, file)
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 file_content = f.read()
                 file_hash = hashlib.md5(file_content.encode('utf-8')).hexdigest()
+                file_hashes.setdefault(file_hash, []).append(file_path)
 
-                if file_hash in file_hashes:
-                    file_hashes[file_hash].append(file_path)
-                else:
-                    file_hashes[file_hash] = [file_path]
-
-# Step 3: Find and display duplicates
-duplicate_files = {hash: paths for hash, paths in file_hashes.items() if len(paths) > 1}
-
-print(f"Total sets of duplicate files found: {len(duplicate_files)}")
-
+# Step 3: Find and log duplicates
+duplicate_files = {h: paths for h, paths in file_hashes.items() if len(paths) > 1}
+logger.info(f"Total sets of duplicate files found: {len(duplicate_files)}")
 for hash_value, files in duplicate_files.items():
-    print("\nDuplicate set:")
+    logger.info(f"Duplicate set (hash: {hash_value}):")
     for file in files:
-        print(file)
+        logger.info(f"  {file}")
 
-# Step 4: Remove duplicate files (keep only one file per set) and log the deleted ones
-log_file_path = 'D:/Projects/HMI/HMI_Project/data/deleted_duplicates_log.txt'
-with open(log_file_path, 'w') as log_file:
+# Step 4: Remove duplicates and log
+with open(LOG_FILE_PATH, 'w') as log_file:
     for files in duplicate_files.values():
-        for duplicate_file in files[1:]:  # Skip the first file, remove others
+        for duplicate_file in files[1:]:
             os.remove(duplicate_file)
-            log_file.write(f"Deleted duplicate file: {duplicate_file}\n")
-            print(f"Deleted duplicate file: {duplicate_file}")
+            log_msg = f"Deleted duplicate file: {duplicate_file}"
+            log_file.write(log_msg + '\n')
+            logger.info(log_msg)
 
-print(f"All deleted duplicates have been logged to {log_file_path}")
+logger.info(f"All deleted duplicates have been logged to {LOG_FILE_PATH}")
