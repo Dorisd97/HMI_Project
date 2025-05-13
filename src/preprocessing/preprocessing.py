@@ -81,7 +81,7 @@ def generate_unique_json_path(base_path):
             return new_path
         i += 1
 
-def extract_emails_to_json(base_output_path, batch_size=50):
+def extract_emails_to_json(base_output_path, batch_size=0):
     output_path = generate_unique_json_path(base_output_path)
 
     all_files = []
@@ -99,7 +99,11 @@ def extract_emails_to_json(base_output_path, batch_size=50):
     logger.info(f"Total eligible files found: {total}")
 
     sorted_file_names = natsort.natsorted(file_map.keys())
-    batch_files = [file_map[name] for name in sorted_file_names[:batch_size]]
+    batch_files = (
+        [file_map[name] for name in sorted_file_names[:batch_size]]
+        if batch_size > 0 else
+        [file_map[name] for name in sorted_file_names]
+    )
 
     logger.info(f"Processing {len(batch_files)} files. Output: {os.path.basename(output_path)}")
 
@@ -127,5 +131,6 @@ def extract_emails_to_json(base_output_path, batch_size=50):
     except Exception as e:
         logger.error(f"❌ Error writing new JSON file: {e}")
 
+
 if __name__ == "__main__":
-    extract_emails_to_json(REFINED_JSON_PATH, batch_size=1000)
+    extract_emails_to_json(REFINED_JSON_PATH, batch_size=0)
