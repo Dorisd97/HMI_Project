@@ -41,27 +41,49 @@ def parse_single_email(email_text, file_path):
             body_lines = lines[body_start_index:]
             body_text = "\n".join(body_lines).strip()
 
-        from_blocks = [m.start() for m in re.finditer(r'^From: .*', body_text, re.MULTILINE)]
-        reply_chains = []
-        if from_blocks:
-            from_blocks.append(len(body_text))
-            for i in range(1, len(from_blocks)):
-                start = from_blocks[i - 1]
-                end = from_blocks[i]
-                reply_chains.append(body_text[start:end].strip())
-            main_body = body_text[:from_blocks[0]].strip()
-        else:
-            main_body = body_text
+        # Detect and extract structured forwarded messages
+        body_chain = []
+        message_blocks = re.split(r"(?=^To: )", body_text, flags=re.MULTILINE)
 
+        for block in message_blocks:
+            if not block.strip():
+                continue
+            entry = {}
+            lines = block.strip().splitlines()
+            body_lines = []
+            in_body = False
+
+            for line in lines:
+                if not in_body:
+                    if re.match(r"^To:\s*(.*)", line):
+                        entry["To"] = line[3:].strip()
+                    elif re.match(r"^cc:\s*(.*)", line, re.IGNORECASE):
+                        entry["cc"] = line[3:].strip()
+                    elif re.match(r"^Subject:\s*(.*)", line, re.IGNORECASE):
+                        entry["Subject"] = line[8:].strip()
+                        in_body = True  # start body after subject
+                else:
+                    body_lines.append(line)
+
+            if body_lines:
+                entry["Body"] = "\n".join(body_lines).strip()
+
+            if entry:
+                body_chain.append(entry)
+
+        # Use the first block as main body if no 'To:' found
+        if not body_chain:
+            main_body = body_text.strip()
+        else:
+            main_body = message_blocks[0].strip()
+
+        # Compile the full record
         record = {key: headers.get(key, "") for key in HEADER_KEYS}
         record["Body"] = main_body.replace('"""', '""')
         record["SourceFile"] = os.path.basename(file_path)
 
-        for idx, reply in enumerate(reply_chains):
-            record[f"ReplyChain{idx + 1}"] = reply.replace('"""', '""')
-
-        if not record["SourceFile"].strip():
-            raise ValueError(f"SourceFile is empty in {file_path}")
+        if body_chain:
+            record["BodyChain"] = body_chain
 
         return record
 
