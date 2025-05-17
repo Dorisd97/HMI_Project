@@ -1,39 +1,58 @@
 import json
-import re
 
-# Load JSON data
-with open('d:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_5data.json', 'r', encoding='utf-8') as f:
-    data = json.load(f)
+def extract_all_to_blocks(body_text):
+    lines = body_text.splitlines()
+    to_blocks = []
+    current_block = []
+    capturing = False
 
-def extract_chain(email):
-    # Split body using common reply/forward separators
-    body = email.get("Body", "")
-    parts = re.split(r'(?:^|\n)(?:-+ ?Original Message ?-+|From:|----- Forwarded by|On .+ wrote:|[\w\s]+@[\w\s]+ on .+)', body, flags=re.IGNORECASE)
-    parts = [p.strip() for p in parts if p.strip()]  # Remove blanks
+    for line in lines:
+        stripped = line.strip()
+        lower = stripped.lower()
 
-    chain = []
-    for i, part in enumerate(parts):
-        entry = {
-            "From": email.get("From", ""),
-            "To": email.get("To", ""),
-            "Subject": email.get("Subject", ""),
-            "Body": part
-        }
-        if "cc" in email and email["cc"]:
-            entry["cc"] = email["cc"]
-        chain.append(entry)
-    return chain
+        # If a new To: line starts, flush old block if any and start a new one
+        if lower.startswith("to:"):
+            if current_block:
+                to_blocks.append("\n".join(current_block))
+                current_block = []
+            capturing = True
+            current_block.append(stripped)
+        elif capturing and (lower.startswith("cc:") or lower.startswith("subject:") or lower.startswith("re:") or lower.startswith("from:") or lower.startswith("to:")):
+            # End current block, do NOT include this line
+            if current_block:
+                to_blocks.append("\n".join(current_block))
+                current_block = []
+            capturing = False
+        elif capturing:
+            current_block.append(stripped)
 
-# Inject BodyChain into each email
-for email in data:
-    body_chain = extract_chain(email)
-    if len(body_chain) > 1:  # Only add if there's a chain
-        email["BodyChain"] = body_chain
+    # Append the last block if it was not closed
+    if current_block:
+        to_blocks.append("\n".join(current_block))
 
-# Save the updated data
-with open('d:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_5data.json', 'r', encoding='utf-8') as f:
-    for i, line in enumerate(f):
-        if i >= 90 and i <= 100:
-            print(f"{i+1}: {line.strip()}")
+    return to_blocks
 
-print("Updated emails saved with embedded BodyChain.")
+def extract_to_addresses(file_path):
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        for idx, email in enumerate(data):
+            print(f"\n===== Email {idx + 1} =====")
+            if "Body" in email:
+                blocks = extract_all_to_blocks(email["Body"])
+                if blocks:
+                    for i, block in enumerate(blocks, 1):
+                        print(f"\n--- To Block #{i} ---\n{block}")
+                else:
+                    print("No 'To:' blocks found in body.")
+            else:
+                print("No 'Body' field found.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+# Example usage
+if __name__ == "__main__":
+    file_path = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_5data.json"
+    extract_to_addresses(file_path)
