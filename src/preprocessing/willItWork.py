@@ -10,6 +10,7 @@ def parse_body_chain_blocks(body_text):
 
     current_block = {}
     block_body_lines = []
+    current_header = None
     in_block = False
     encountered_first_header = False
 
@@ -23,62 +24,78 @@ def parse_body_chain_blocks(body_text):
 
     i = 0
     while i < len(lines):
-        line = lines[i].strip()
-        lower_line = line.lower()
+        line = lines[i]
+        stripped = line.strip()
+        lower_line = stripped.lower()
 
+        is_header = any(lower_line.startswith(h) for h in HEADER_KEYS)
+
+        # Case 1: New From: or To: starts a new block
         if lower_line.startswith("from:") or lower_line.startswith("to:"):
             if in_block:
                 flush_block()
-            else:
-                encountered_first_header = True
-                in_block = True
+            in_block = True
+            encountered_first_header = True
 
-            current_block = {}
-            if lower_line.startswith("from:"):
-                current_block["From"] = line[5:].strip()
-            elif lower_line.startswith("to:"):
-                current_block["To"] = line[3:].strip()
+            current_header = lower_line.split(":", 1)[0].capitalize()
+            current_block[current_header] = stripped.split(":", 1)[1].strip()
+
+            # Handle wrapped headers
+            i += 1
+            while i < len(lines):
+                next_line = lines[i].strip()
+                next_lower = next_line.lower()
+
+                # Stop on next known header
+                if any(next_lower.startswith(h) for h in HEADER_KEYS):
+                    break
+
+                # Continuation (only for From, To, Cc, Bcc)
+                if current_header.lower() not in ["subject", "re"] and next_line:
+                    current_block[current_header] += " " + next_line.strip()
+                else:
+                    break
+                i += 1
+            continue
+
+        # Case 2: Inside a block and encountering additional headers
+        elif in_block and is_header:
+            current_header = lower_line.split(":", 1)[0].capitalize()
+            current_block[current_header] = stripped.split(":", 1)[1].strip()
+
+            # Subject must NOT take continuation lines
+            if current_header.lower() in ["subject", "re"]:
+                i += 1
+                continue
+
+            # Other headers may wrap
+            i += 1
+            while i < len(lines):
+                next_line = lines[i].strip()
+                next_lower = next_line.lower()
+                if any(next_lower.startswith(h) for h in HEADER_KEYS):
+                    break
+                if next_line:
+                    current_block[current_header] += " " + next_line.strip()
+                else:
+                    break
+                i += 1
+            continue
+
+        # Case 3: Collecting body content
+        elif in_block:
+            block_body_lines.append(line)
             i += 1
 
-            # Handle other headers
-            while i < len(lines):
-                peek = lines[i].strip()
-                peek_lower = peek.lower()
-
-                if peek_lower.startswith("from:") or peek_lower.startswith("to:"):
-                    break
-                elif peek_lower.startswith("cc:"):
-                    current_block["Cc"] = peek[3:].strip()
-                elif peek_lower.startswith("bcc:"):
-                    current_block["Bcc"] = peek[4:].strip()
-                elif peek_lower.startswith("subject:") or peek_lower.startswith("re:"):
-                    current_block["Subject"] = re.sub(r'^(subject:|re:)', '', peek, flags=re.I).strip()
-                    i += 1
-                    break  # body starts after subject
-                i += 1
-
-            # Start collecting body lines after headers
-            while i < len(lines):
-                content_line = lines[i].strip()
-                if content_line.lower().startswith("from:") or content_line.lower().startswith("to:"):
-                    break
-                block_body_lines.append(lines[i])
-                i += 1
-
+        # Case 4: Top-level pre-chain body
         else:
-            if not encountered_first_header:
-                regular_body_lines.append(lines[i])
-            else:
-                # For lines in between misformatted or extra lines
-                if in_block:
-                    block_body_lines.append(lines[i])
+            regular_body_lines.append(line)
             i += 1
 
     if in_block:
         flush_block()
 
-    cleaned_body = "\n".join(regular_body_lines).strip()
-    return cleaned_body, body_chain
+    return "\n".join(regular_body_lines).strip(), body_chain
 
 def process_email_json(input_path, output_path):
     try:
@@ -95,12 +112,12 @@ def process_email_json(input_path, output_path):
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-        print(f"✅ Fixed and saved to: {output_path}")
+        print(f"✅ Final JSON saved to: {output_path}")
 
     except Exception as e:
         print(f"❌ Error: {e}")
 
-# Run it
+# Run this
 if __name__ == "__main__":
     input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_5data.json"
     output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_5data_with_body_chain.json"
