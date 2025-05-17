@@ -1,9 +1,18 @@
 import json
 import re
+import logging
+from src.config.config import CLEANED_JSON_PATH, BODY_CHAIN_OUTPUT_PATH
+
+# Setup logger
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 
 HEADER_KEYS = ["from:", "to:", "cc:", "bcc:", "subject:", "re:"]
 
-def parse_body_chain_blocks(body_text):
+def parse_body_chain_blocks(body_text, source_file=None):
     lines = body_text.splitlines()
     body_chain = []
     regular_body_lines = []
@@ -30,7 +39,6 @@ def parse_body_chain_blocks(body_text):
 
         is_header = any(lower_line.startswith(h) for h in HEADER_KEYS)
 
-        # Case 1: New From: or To: starts a new block
         if lower_line.startswith("from:") or lower_line.startswith("to:"):
             if in_block:
                 flush_block()
@@ -40,17 +48,16 @@ def parse_body_chain_blocks(body_text):
             current_header = lower_line.split(":", 1)[0].capitalize()
             current_block[current_header] = stripped.split(":", 1)[1].strip()
 
-            # Handle wrapped headers
+            # Handle header wrapping for From/To
             i += 1
             while i < len(lines):
                 next_line = lines[i].strip()
                 next_lower = next_line.lower()
 
-                # Stop on next known header
                 if any(next_lower.startswith(h) for h in HEADER_KEYS):
                     break
 
-                # Continuation (only for From, To, Cc, Bcc)
+                # allow wrapping only for non-subject headers
                 if current_header.lower() not in ["subject", "re"] and next_line:
                     current_block[current_header] += " " + next_line.strip()
                 else:
@@ -58,12 +65,11 @@ def parse_body_chain_blocks(body_text):
                 i += 1
             continue
 
-        # Case 2: Inside a block and encountering additional headers
         elif in_block and is_header:
             current_header = lower_line.split(":", 1)[0].capitalize()
             current_block[current_header] = stripped.split(":", 1)[1].strip()
 
-            # Subject must NOT take continuation lines
+            # Subject: take only first line
             if current_header.lower() in ["subject", "re"]:
                 i += 1
                 continue
@@ -82,12 +88,10 @@ def parse_body_chain_blocks(body_text):
                 i += 1
             continue
 
-        # Case 3: Collecting body content
         elif in_block:
             block_body_lines.append(line)
             i += 1
 
-        # Case 4: Top-level pre-chain body
         else:
             regular_body_lines.append(line)
             i += 1
@@ -95,30 +99,42 @@ def parse_body_chain_blocks(body_text):
     if in_block:
         flush_block()
 
+    if source_file:
+        logging.info(f"Parsed {len(body_chain)} chains from: {source_file}")
+
     return "\n".join(regular_body_lines).strip(), body_chain
 
-def process_email_json(input_path, output_path):
+
+def process_first_n_emails(input_path, output_path, limit=50):
     try:
         with open(input_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        for email in data:
+        output = []
+        for idx, email in enumerate(data[:limit]):
             if "Body" in email:
-                cleaned_body, body_chain = parse_body_chain_blocks(email["Body"])
+                source_file = email.get("SourceFile", f"Record_{idx}")
+                logging.info(f"[{idx+1}] Processing {source_file}")
+                cleaned_body, body_chain = parse_body_chain_blocks(email["Body"], source_file)
                 email["Body"] = cleaned_body
                 if body_chain:
                     email["BodyChain"] = body_chain
+                else:
+                    logging.info(f"[{idx+1}] No BodyChain detected.")
+            output.append(email)
 
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            json.dump(output, f, indent=2, ensure_ascii=False)
 
-        print(f"✅ Final JSON saved to: {output_path}")
+        logging.info(f"✅ Successfully saved {limit} processed records to: {output_path}")
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logging.error(f"❌ Error processing file: {e}")
 
-# Run this
+# Main entrypoint
 if __name__ == "__main__":
-    input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_5data.json"
-    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_5data_with_body_chain.json"
-    process_email_json(input_file, output_file)
+    process_first_n_emails(
+        input_path=CLEANED_JSON_PATH,
+        output_path=BODY_CHAIN_OUTPUT_PATH,
+        limit=50
+    )
