@@ -9,8 +9,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-HEADER_KEYS = ["from:", "to:", "cc:", "bcc:", "subject:", "re:"]
-ORDERED_KEYS = ["From", "To", "Cc", "Bcc", "Subject", "Body"]
+HEADER_KEYS = ["from:", "to:", "cc:", "bcc:", "subject:", "re:", "sent:"]
+ORDERED_KEYS = ["From", "Sent", "To", "Cc", "Bcc", "Subject", "Body"]
 
 
 def parse_body_chain_blocks(body_text, source_file=None):
@@ -30,9 +30,9 @@ def parse_body_chain_blocks(body_text, source_file=None):
         stripped = line.strip()
         lower_line = stripped.lower()
 
-        is_header = any(lower_line.startswith(h) for h in HEADER_KEYS)
         is_forwarded = "forwarded by" in lower_line or "original message" in lower_line
 
+        # Normalize From:
         if lower_line.startswith("from:") or is_forwarded:
             if block_started:
                 current_fields["Body"] = "\n".join(current_body_lines).strip()
@@ -44,14 +44,27 @@ def parse_body_chain_blocks(body_text, source_file=None):
             block_started = True
             seen_from = True
             key = "From"
-            current_fields[key] = line.strip()
+            current_fields[key] = stripped
             i += 1
-
             while i < len(lines):
                 lookahead = lines[i].strip().lower()
-                if lookahead.startswith("to:"):
+                if lookahead.startswith("to:") or lookahead.startswith("sent:"):
                     break
                 current_fields[key] += " " + lines[i].strip()
+                i += 1
+            continue
+
+        elif lower_line.startswith("sent:"):
+            key = "Sent"
+            value = stripped[5:].strip()
+            current_fields[key] = value
+            i += 1
+            while i < len(lines):
+                next_line = lines[i].strip()
+                next_lower = next_line.lower()
+                if any(next_lower.startswith(h) for h in HEADER_KEYS):
+                    break
+                current_fields[key] += " " + next_line
                 i += 1
             continue
 
@@ -76,7 +89,7 @@ def parse_body_chain_blocks(body_text, source_file=None):
                 i += 1
             continue
 
-        elif in_chain and is_header:
+        elif in_chain and any(lower_line.startswith(h) for h in HEADER_KEYS):
             key = lower_line.split(":", 1)[0].capitalize()
             value = stripped.split(":", 1)[1].strip()
             current_fields[key] = value
