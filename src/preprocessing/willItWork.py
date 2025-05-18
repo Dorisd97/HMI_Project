@@ -23,35 +23,35 @@ def parse_body_chain_blocks(body_text, source_file=None):
     in_chain = False
     block_started = False
     seen_from = False
-
     i = 0
+
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
         lower_line = stripped.lower()
 
         is_header = any(lower_line.startswith(h) for h in HEADER_KEYS)
+        is_forwarded = "forwarded by" in lower_line or "original message" in lower_line
 
-        if lower_line.startswith("from:"):
+        if lower_line.startswith("from:") or is_forwarded:
             if block_started:
                 current_fields["Body"] = "\n".join(current_body_lines).strip()
                 body_chain.append({k: current_fields.get(k, "") for k in ORDERED_KEYS})
                 current_fields = {key: "" for key in ORDERED_KEYS}
                 current_body_lines = []
+
             in_chain = True
             block_started = True
             seen_from = True
-
             key = "From"
-            value = stripped[5:].strip()
-            current_fields[key] = value
+            current_fields[key] = line.strip()
             i += 1
+
             while i < len(lines):
-                next_line = lines[i].strip()
-                next_lower = next_line.lower()
-                if any(next_lower.startswith(h) for h in HEADER_KEYS):
+                lookahead = lines[i].strip().lower()
+                if lookahead.startswith("to:"):
                     break
-                current_fields[key] += " " + next_line
+                current_fields[key] += " " + lines[i].strip()
                 i += 1
             continue
 
@@ -63,7 +63,6 @@ def parse_body_chain_blocks(body_text, source_file=None):
                 current_body_lines = []
             in_chain = True
             block_started = True
-
             key = "To"
             value = stripped[3:].strip()
             current_fields[key] = value
@@ -71,7 +70,7 @@ def parse_body_chain_blocks(body_text, source_file=None):
             while i < len(lines):
                 next_line = lines[i].strip()
                 next_lower = next_line.lower()
-                if any(next_lower.startswith(h) for h in HEADER_KEYS):
+                if any(next_lower.startswith(h) for h in HEADER_KEYS) or "forwarded by" in next_lower:
                     break
                 current_fields[key] += " " + next_line
                 i += 1
@@ -82,14 +81,12 @@ def parse_body_chain_blocks(body_text, source_file=None):
             value = stripped.split(":", 1)[1].strip()
             current_fields[key] = value
             i += 1
-
             if key.lower() in ["subject", "re"]:
                 continue
-
             while i < len(lines):
                 next_line = lines[i].strip()
                 next_lower = next_line.lower()
-                if any(next_lower.startswith(h) for h in HEADER_KEYS):
+                if any(next_lower.startswith(h) for h in HEADER_KEYS) or "forwarded by" in next_lower:
                     break
                 current_fields[key] += " " + next_line
                 i += 1
