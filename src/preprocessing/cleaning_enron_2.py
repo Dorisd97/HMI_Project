@@ -23,6 +23,12 @@ def clean_email_body(body):
     # Remove forwarded message separators
     body = re.sub(r'-+\s*Forwarded by.*?\n', '', body)
     body = re.sub(r'---------------------- Forwarded by.*?---------------------------\n', '', body)
+
+    # Remove "Original Message" separators
+    body = re.sub(r'-+\s*Original Message\s*-+\n', '', body, flags=re.IGNORECASE)
+    body = re.sub(r'-----Original Message-----\n', '', body, flags=re.IGNORECASE)
+
+    # Remove other common separators
     body = re.sub(r'^-{10,}.*?\n', '', body, flags=re.MULTILINE)
     body = re.sub(r'^={10,}.*?\n', '', body, flags=re.MULTILINE)
 
@@ -55,7 +61,6 @@ def clean_email_body(body):
     result = re.sub(r' {2,}', ' ', result)
 
     return result.strip()
-
 
 def extract_name_from_email(email_addr):
     """Extract name from email address."""
@@ -114,7 +119,7 @@ def extract_message_id(message_id_str):
 
 
 def clean_enron_emails(json_file_path, output_file_path):
-    """Main function to clean and format Enron emails."""
+    """Main function to clean Enron emails while preserving all original fields."""
 
     with open(json_file_path, 'r', encoding='utf-8') as file:
         emails = json.load(file)
@@ -123,25 +128,20 @@ def clean_enron_emails(json_file_path, output_file_path):
 
     for i, email in enumerate(emails):
         try:
+            # Create a copy of the original email to preserve all fields
+            cleaned_email = email.copy()
+
             # Clean the email body
             original_body = email.get('Body', '')
             cleaned_body = clean_email_body(original_body)
 
-            # Skip if body is too short
+            # Skip if body is too short after cleaning
             if len(cleaned_body.strip()) < 10:
                 print(f"Skipping email {i + 1}: Body too short after cleaning")
                 continue
 
-            # Create cleaned email object
-            cleaned_email = {
-                "id": extract_message_id(email.get("Message-ID", "")),
-                "date": format_date(email.get("Date", "")),
-                "from": extract_name_from_email(email.get("From", "")),
-                "from_email": clean_email_address(email.get("From", "")),
-                "to": clean_email_address(email.get("To", "")),
-                "subject": email.get("Subject", "").strip(),
-                "body": cleaned_body
-            }
+            # Update the Body field with cleaned content
+            cleaned_email['Body'] = cleaned_body
 
             cleaned_emails.append(cleaned_email)
 
@@ -149,7 +149,7 @@ def clean_enron_emails(json_file_path, output_file_path):
             print(f"Error processing email {i + 1}: {e}")
             continue
 
-    # Save to JSON
+    # Save to JSON with all original fields preserved
     with open(output_file_path, 'w', encoding='utf-8') as output_file:
         json.dump(cleaned_emails, output_file, indent=2, ensure_ascii=False)
 
@@ -161,7 +161,7 @@ def clean_enron_emails(json_file_path, output_file_path):
 
 # Usage
 if __name__ == "__main__":
-    input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron_50_Data.json"
-    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron_emails_2.json"
+    input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron.json"
+    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron_emails_All_2.json"
 
     clean_enron_emails(input_file, output_file)
