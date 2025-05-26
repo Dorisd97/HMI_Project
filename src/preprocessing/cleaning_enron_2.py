@@ -14,6 +14,21 @@ logging.basicConfig(
 )
 
 
+def validate_email_data(email, email_number):
+    """Validate if email has either subject or body content."""
+    validation_errors = []
+
+    # Get subject and body
+    subject = email.get('Subject', '').strip()
+    body = email.get('Body', '').strip()
+
+    # Skip only if BOTH subject and body are empty
+    if not subject and not body:
+        validation_errors.append("Both subject and body are empty")
+
+    return validation_errors
+
+
 def clean_email_body(body):
     """Clean email body by removing unwanted characters and leading spaces."""
     if not body:
@@ -112,62 +127,6 @@ def clean_email_body(body):
     return result.strip(), cleaning_steps, original_length, final_length, reduction_percent
 
 
-def extract_name_from_email(email_addr):
-    """Extract name from email address."""
-    if not email_addr:
-        return ""
-
-    email_addr = re.sub(r'[<>]', '', email_addr)
-
-    name_match = re.search(r'^(.*?)<', email_addr)
-    if name_match:
-        return name_match.group(1).strip().strip('"')
-
-    local_part = email_addr.split('@')[0]
-
-    if '.' in local_part:
-        parts = local_part.split('.')
-        return ' '.join(part.title() for part in parts[:2])
-
-    return local_part.title()
-
-
-def format_date(date_str):
-    """Format date string consistently."""
-    try:
-        if '.' in date_str and len(date_str.split('.')) == 3:
-            dt = datetime.strptime(date_str, "%d.%m.%Y %H:%M:%S")
-            return dt.strftime("%m/%d/%Y %I:%M:%S %p")
-        else:
-            return date_str
-    except:
-        return date_str
-
-
-def clean_email_address(email_str):
-    """Clean and extract email address."""
-    if not email_str:
-        return ""
-
-    email_str = re.sub(r'\s+', ' ', email_str.strip())
-    email_str = re.sub(r'[<>"\']', '', email_str)
-
-    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', email_str)
-    if email_match:
-        return email_match.group(0)
-
-    return email_str.strip()
-
-
-def extract_message_id(message_id_str):
-    """Extract clean message ID."""
-    if not message_id_str:
-        return ""
-
-    clean_id = re.sub(r'[<>]', '', message_id_str)
-    return clean_id.strip()
-
-
 def clean_enron_emails(json_file_path, output_file_path):
     """Main function to clean Enron emails while preserving all original fields."""
 
@@ -184,40 +143,76 @@ def clean_enron_emails(json_file_path, output_file_path):
         return []
 
     cleaned_emails = []
+    skipped_emails = []  # Track skipped emails
     total_emails = len(emails)
     processed_count = 0
     skipped_count = 0
+    validation_skipped = 0
+    processing_skipped = 0
 
     for i, email in enumerate(emails, 1):
         try:
-            # Extract email identification info
+            # Extract email identification info (safely)
             message_id = email.get("Message-ID", "Unknown")
             source_file = email.get("SourceFile", "Unknown")
-            subject = email.get("Subject", "No Subject")
+            subject = email.get("Subject", "").strip()
             from_addr = email.get("From", "Unknown")
             date = email.get("Date", "Unknown")
+            body = email.get("Body", "").strip()
+
+            # Calculate stats
+            body_length = len(body)
+            subject_length = len(subject)
+            has_subject = bool(subject)
+            has_body = bool(body)
 
             logging.info(f"\n{'=' * 60}")
             logging.info(f"Processing Email {i}/{total_emails}")
             logging.info(f"Message ID: {message_id}")
             logging.info(f"Source File: {source_file}")
-            logging.info(f"Subject: {subject}")
+            logging.info(f"Subject: {subject if subject else '[EMPTY]'}")
             logging.info(f"From: {from_addr}")
             logging.info(f"Date: {date}")
+            logging.info(f"Has Subject: {has_subject} (length: {subject_length})")
+            logging.info(f"Has Body: {has_body} (length: {body_length})")
+
+            # VALIDATION STEP - Check if email has either subject or body
+            validation_errors = validate_email_data(email, i)
+
+            if validation_errors:
+                skip_reason = f"Validation failed: {', '.join(validation_errors)}"
+                logging.warning(f"Email {i} failed validation - SKIPPED")
+                logging.warning(f"Validation errors: {', '.join(validation_errors)}")
+
+                skipped_emails.append({
+                    "email_number": i,
+                    "message_id": message_id,
+                    "source_file": source_file,
+                    "subject": subject if subject else "[EMPTY]",
+                    "from": from_addr,
+                    "date": date,
+                    "skip_reason": skip_reason,
+                    "validation_errors": validation_errors,
+                    "has_subject": has_subject,
+                    "has_body": has_body,
+                    "subject_length": subject_length,
+                    "body_length": body_length,
+                    "skip_stage": "validation"
+                })
+                skipped_count += 1
+                validation_skipped += 1
+                continue
+
+            logging.info("Email passed validation (has subject or body) - proceeding with cleaning")
 
             # Create a copy of the original email to preserve all fields
             cleaned_email = email.copy()
 
-            # Clean the email body
+            # Clean the email body (even if it's empty)
             original_body = email.get('Body', '')
             original_body_length = len(original_body)
 
             logging.info(f"Original body length: {original_body_length} characters")
-
-            if original_body_length == 0:
-                logging.warning(f"Email {i} has empty body - SKIPPED")
-                skipped_count += 1
-                continue
 
             # Perform cleaning
             cleaned_body, cleaning_steps, orig_len, final_len, reduction_percent = clean_email_body(original_body)
@@ -233,14 +228,7 @@ def clean_enron_emails(json_file_path, output_file_path):
             logging.info(f"Body length after cleaning: {final_len} characters")
             logging.info(f"Size reduction: {reduction_percent}%")
 
-            # Skip if body is too short after cleaning
-            if len(cleaned_body.strip()) < 10:
-                logging.warning(
-                    f"Email {i} body too short after cleaning ({len(cleaned_body.strip())} chars) - SKIPPED")
-                skipped_count += 1
-                continue
-
-            # Update the Body field with cleaned content
+            # Update the Body field with cleaned content (even if empty)
             cleaned_email['Body'] = cleaned_body
             cleaned_emails.append(cleaned_email)
             processed_count += 1
@@ -248,8 +236,24 @@ def clean_enron_emails(json_file_path, output_file_path):
             logging.info(f"Email {i} successfully processed and added to output")
 
         except Exception as e:
+            skip_reason = f"Processing error: {str(e)}"
             logging.error(f"Error processing email {i} from {source_file}: {e}")
+            skipped_emails.append({
+                "email_number": i,
+                "message_id": email.get("Message-ID", "Unknown"),
+                "source_file": email.get("SourceFile", "Unknown"),
+                "subject": email.get("Subject", "").strip() or "[EMPTY]",
+                "from": email.get("From", "Unknown"),
+                "date": email.get("Date", "Unknown"),
+                "skip_reason": skip_reason,
+                "has_subject": bool(email.get("Subject", "").strip()),
+                "has_body": bool(email.get("Body", "").strip()),
+                "subject_length": len(email.get("Subject", "").strip()),
+                "body_length": len(email.get("Body", "").strip()),
+                "skip_stage": "processing_error"
+            })
             skipped_count += 1
+            processing_skipped += 1
             continue
 
     # Save to JSON with all original fields preserved
@@ -261,6 +265,16 @@ def clean_enron_emails(json_file_path, output_file_path):
         logging.error(f"Failed to save output file: {e}")
         return []
 
+    # Save skipped emails report
+    if skipped_emails:
+        skipped_report_file = output_file_path.replace('.json', '_skipped_report.json')
+        try:
+            with open(skipped_report_file, 'w', encoding='utf-8') as skipped_file:
+                json.dump(skipped_emails, skipped_file, indent=2, ensure_ascii=False)
+            logging.info(f"Skipped emails report saved to {skipped_report_file}")
+        except Exception as e:
+            logging.error(f"Failed to save skipped emails report: {e}")
+
     # Final summary
     logging.info(f"\n{'=' * 60}")
     logging.info("CLEANING PROCESS SUMMARY")
@@ -268,8 +282,51 @@ def clean_enron_emails(json_file_path, output_file_path):
     logging.info(f"Total emails in input: {total_emails}")
     logging.info(f"Successfully processed: {processed_count}")
     logging.info(f"Skipped emails: {skipped_count}")
+    logging.info(f"  - Skipped at validation (no subject AND no body): {validation_skipped}")
+    logging.info(f"  - Skipped due to processing errors: {processing_skipped}")
     logging.info(f"Success rate: {round((processed_count / total_emails) * 100, 2)}%")
+
+    # Detailed skipped emails summary
+    if skipped_emails:
+        logging.info(f"\n{'=' * 60}")
+        logging.info("SKIPPED EMAILS DETAILS")
+        logging.info(f"{'=' * 60}")
+
+        # Group by skip stage and reason
+        skip_stages = {}
+        for skipped in skipped_emails:
+            stage = skipped.get('skip_stage', 'unknown')
+            if stage not in skip_stages:
+                skip_stages[stage] = {}
+
+            reason = skipped['skip_reason']
+            if reason not in skip_stages[stage]:
+                skip_stages[stage][reason] = []
+            skip_stages[stage][reason].append(skipped)
+
+        for stage, reasons in skip_stages.items():
+            logging.info(f"\nSKIP STAGE: {stage.upper()}")
+            logging.info("=" * 40)
+
+            for reason, emails in reasons.items():
+                logging.info(f"\nReason: {reason} ({len(emails)} emails)")
+                logging.info("-" * 50)
+                for email in emails:
+                    logging.info(f"  Email #{email['email_number']}")
+                    logging.info(f"    Source File: {email['source_file']}")
+                    logging.info(f"    Message ID: {email['message_id']}")
+                    logging.info(f"    Subject: {email['subject']}")
+                    logging.info(f"    Has Subject: {email.get('has_subject', 'N/A')}")
+                    logging.info(f"    Has Body: {email.get('has_body', 'N/A')}")
+                    logging.info(f"    Subject Length: {email.get('subject_length', 'N/A')} chars")
+                    logging.info(f"    Body Length: {email.get('body_length', 'N/A')} chars")
+                    if 'validation_errors' in email:
+                        logging.info(f"    Validation Errors: {', '.join(email['validation_errors'])}")
+                    logging.info("")
+
     logging.info(f"Output file: {output_file_path}")
+    if skipped_emails:
+        logging.info(f"Skipped emails report: {output_file_path.replace('.json', '_skipped_report.json')}")
     logging.info("Process completed!")
 
     return cleaned_emails
@@ -277,8 +334,8 @@ def clean_enron_emails(json_file_path, output_file_path):
 
 # Usage
 if __name__ == "__main__":
-    input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/refined_enron.json"
-    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron_emails_All_3.json"
+    input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron.json"
+    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron_emails_All_6.json"
 
     print("Starting Enron email cleaning process...")
     print("Check 'email_cleaning.log' for detailed logs")
@@ -287,3 +344,4 @@ if __name__ == "__main__":
 
     print(f"\nProcess completed! Check the log file for details.")
     print(f"Processed {len(cleaned_data)} emails successfully.")
+    print("Check 'cleaned_enron_emails_skipped_report.json' for details on skipped emails.")
