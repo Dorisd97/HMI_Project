@@ -30,7 +30,7 @@ def validate_email_data(email, email_number):
 
 
 def clean_email_body(body):
-    """Clean email body by removing unwanted characters and leading spaces."""
+    """Clean email body by removing unwanted characters and symbols."""
     if not body:
         return ""
 
@@ -75,6 +75,30 @@ def clean_email_body(body):
     if len(body) != before_separators:
         cleaning_steps.append("Removed dash/equals separators")
 
+    # Remove email reply/forward symbols and unwanted artifacts
+    before_reply_symbols = len(body)
+
+    # Remove ">" symbols at the beginning of lines (email reply quotes)
+    body = re.sub(r'^>\s*', '', body, flags=re.MULTILINE)
+    body = re.sub(r'^>\s*>\s*', '', body, flags=re.MULTILINE)  # Multiple levels
+    body = re.sub(r'^>\s*>\s*>\s*', '', body, flags=re.MULTILINE)  # Even more levels
+
+    # Remove common email client artifacts
+    body = re.sub(r'^\[mailto:.*?\]', '', body, flags=re.MULTILINE)
+    body = re.sub(r'<mailto:.*?>', '', body)
+
+    # Remove HTML-like tags if any
+    body = re.sub(r'<[^>]+>', '', body)
+
+    # Remove excessive punctuation and symbols
+    body = re.sub(r'[*]{3,}', '', body)  # Remove *** patterns
+    body = re.sub(r'[_]{3,}', '', body)  # Remove ___ patterns
+    body = re.sub(r'[~]{3,}', '', body)  # Remove ~~~ patterns
+    body = re.sub(r'[#]{3,}', '', body)  # Remove ### patterns
+
+    if len(body) != before_reply_symbols:
+        cleaning_steps.append("Removed email reply symbols and unwanted artifacts")
+
     # Split into lines and clean each line
     lines = body.split('\n')
     cleaned_lines = []
@@ -84,6 +108,10 @@ def clean_email_body(body):
         original_line = line
         # Remove leading and trailing whitespace from each line
         cleaned_line = line.strip()
+
+        # Skip lines that are just symbols or empty (but keep meaningful content)
+        if re.match(r'^[>\s\-=_*~#]*$', cleaned_line):
+            continue
 
         if len(original_line) > len(cleaned_line):
             leading_spaces_removed += 1
@@ -335,7 +363,7 @@ def clean_enron_emails(json_file_path, output_file_path):
 # Usage
 if __name__ == "__main__":
     input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron.json"
-    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron_emails_All_6.json"
+    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron_emails_All_7.json"
 
     print("Starting Enron email cleaning process...")
     print("Check 'email_cleaning.log' for detailed logs")
