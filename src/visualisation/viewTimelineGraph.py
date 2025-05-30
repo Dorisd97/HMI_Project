@@ -110,6 +110,48 @@ else:
     st.info(f"No selection—showing first {MIN_SELECTED} chronologically.")
     working = filtered.head(MIN_SELECTED)
 
+# ————— 2) Daily Volume Line Chart —————
+st.subheader("📊 Daily Email Volume")
+if not filtered.empty:
+    daily_counts = (
+        filtered
+        .set_index("DateTime")
+        .resample("D")
+        .size()
+        .rename("Count")
+        .reset_index()
+    )
+    fig_line = px.line(
+        daily_counts,
+        x="DateTime",
+        y="Count",
+        title="Number of Emails per Day",
+        height=250
+    )
+    fig_line.update_layout(xaxis_title="Date", yaxis_title="Email Count")
+    st.plotly_chart(fig_line, use_container_width=True)
+
+# ————— 3) Heatmap: Hour vs Day of Week —————
+st.subheader("📋 Heatmap: Emails by Hour & Day of Week")
+if not filtered.empty:
+    heat = filtered.assign(
+        DayOfWeek=filtered["DateTime"].dt.day_name(),
+        Hour=filtered["DateTime"].dt.hour
+    ).groupby(["DayOfWeek", "Hour"]).size().rename("Count").reset_index()
+    days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    heat["DayOfWeek"] = pd.Categorical(heat["DayOfWeek"], categories=days, ordered=True)
+    fig_heat = px.density_heatmap(
+        heat,
+        x="Hour",
+        y="DayOfWeek",
+        z="Count",
+        title="Email Traffic by Hour & Day",
+        height=350,
+        nbinsx=24
+    )
+    fig_heat.update_layout(xaxis_title="Hour of Day", yaxis_title="Day of Week")
+    st.plotly_chart(fig_heat, use_container_width=True)
+
 # ————— 3) Paginated View & Lazy-Load Body —————
 st.subheader(f"✉️ Viewing {len(working)} Emails")
 if working.empty:
