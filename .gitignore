@@ -1,1 +1,3 @@
 data/Enron_data/
+/log
+log/email_cleaning.log
