@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from collections import Counter
 import re
-from src.config.config import REFINED_JSON_PATH
+from src.config.config import CLEANED_JSON_PATH_1
 
 # ----------------------------
 # Load and normalize JSON
@@ -18,7 +18,7 @@ def load_data(json_path):
     df = pd.json_normalize(data)
     return df
 
-df = load_data(REFINED_JSON_PATH)
+df = load_data(CLEANED_JSON_PATH_1)
 
 # ----------------------------
 # Clean/rename relevant columns for clarity
