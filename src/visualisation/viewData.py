@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import json
-from src.config.config import CLEANED_JSON_PATH_1
+from src.config.config import CLEANED_JSON_PATH
 
 # Load JSON
-with open(CLEANED_JSON_PATH_1, 'r') as f:
+with open(CLEANED_JSON_PATH, 'r') as f:
     data = json.load(f)
 
 # Normalize to DataFrame

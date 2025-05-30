@@ -2,56 +2,92 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from streamlit_plotly_events import plotly_events
+import json
+from datetime import date
+from src.config.config import  CLEANED_JSON_PATH
 
 # ————— Page Config —————
-st.set_page_config(layout="wide", page_title="Interactive Email Timeline & Selection")
+st.set_page_config(layout="wide", page_title="Email Timeline & Selection")
 
 # ————— Constants —————
-JSON_PATH = "/mnt/data/cleaned_json_50.json"
+JSON_PATH = CLEANED_JSON_PATH
 PAGE_SIZE = 50
+MIN_SELECTED = 10
 
-# ————— Load & Cache —————
+# ————— Load & Introspect JSON —————
 @st.cache_data
-def load_data(path):
-    df = pd.read_json(path)
-    df["DateTime"] = pd.to_datetime(
-        df["Date"],
-        format="%d.%m.%Y %H:%M:%S",
-        errors="coerce"
-    )
-    return df.dropna(subset=["DateTime"]).sort_values("DateTime").reset_index(drop=True)
+def load_raw(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-df = load_data(JSON_PATH)
+raw = load_raw(JSON_PATH)
+if not isinstance(raw, list) or len(raw) == 0:
+    st.error("JSON is empty or not an array of emails.")
+    st.stop()
+
+# show user the keys in a sample record
+st.sidebar.markdown("**JSON sample keys:**")
+st.sidebar.write(list(raw[0].keys()))
+
+# flatten into DataFrame
+df = pd.json_normalize(raw)
+
+# find date-like columns
+candidates = [c for c in df.columns if any(k in c.lower() for k in ("date","time","timestamp"))]
+st.sidebar.markdown("**Date-like columns:**")
+st.sidebar.write(candidates)
+
+if not candidates:
+    st.error("No date-like field found in your JSON.")
+    st.stop()
+
+# pick the first candidate and parse it
+date_col = candidates[0]
+df["DateTime"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+
+# drop rows where parse failed
+df = df.dropna(subset=["DateTime"]).sort_values("DateTime").reset_index(drop=True)
+if df.empty:
+    st.error(f"Could not parse any dates from field `{date_col}`.")
+    st.stop()
 
 # ————— Sidebar Filters —————
 st.sidebar.header("🔍 Filters")
-min_date = df["DateTime"].dt.date.min()
-max_date = df["DateTime"].dt.date.max()
+valid_dates = df["DateTime"]
+min_date = valid_dates.min().date()
+max_date = valid_dates.max().date()
+
 start_date, end_date = st.sidebar.date_input(
-    "Date range", (min_date, max_date), min_value=min_date, max_value=max_date
+    "Date range",
+    value=(min_date, max_date),
+    min_value=min_date,
+    max_value=max_date,
 )
-senders = sorted(df["From"].unique())
+
+senders = sorted(df.get("From", pd.Series(["(unknown)"])).fillna("(unknown)").unique())
 selected_senders = st.sidebar.multiselect("Sender", senders, default=senders)
 subject_kw = st.sidebar.text_input("Subject contains")
 
+# apply filters
 mask = (
     df["DateTime"].dt.date.between(start_date, end_date) &
-    df["From"].isin(selected_senders)
+    df.get("From", "").isin(selected_senders)
 )
 if subject_kw:
-    mask &= df["Subject"].str.contains(subject_kw, case=False, na=False)
+    mask &= df.get("Subject", "").str.contains(subject_kw, case=False, na=False)
+
 filtered = df[mask]
 
-# ————— 1) Interactive Timeline with Selection —————
-st.subheader("📈 Email Timeline (select with box/lasso)")
+# ————— 1) Interactive Timeline —————
+st.subheader("📈 Select Emails on the Timeline")
 fig = px.scatter(
     filtered,
     x="DateTime",
     y="From",
     hover_data=["Subject"],
     render_mode="webgl",
-    title="Emails Over Time by Sender",
-    height=400
+    title="Drag a box or lasso to select",
+    height=350,
 )
 fig.update_traces(marker={"size": 6})
 fig.update_layout(
@@ -59,37 +95,38 @@ fig.update_layout(
     yaxis_title="Sender",
     yaxis={"categoryorder": "array", "categoryarray": senders},
 )
-selected_points = plotly_events(fig, select_event=True, override_height=400)
+selected = plotly_events(fig, select_event=True, override_height=350)
 st.plotly_chart(fig, use_container_width=True)
 
-# Build working_df based on timeline selection or fallback to full filtered
-if selected_points:
-    idxs = [pt["pointIndex"] for pt in selected_points]
-    working_df = filtered.iloc[idxs]
-    st.info(f"{len(working_df)} point(s) selected on the timeline")
+# ————— 2) Build Working Set (≥ MIN_SELECTED) —————
+if selected:
+    idxs = [pt["pointIndex"] for pt in selected]
+    if len(idxs) < MIN_SELECTED:
+        remaining = [i for i in filtered.index if i not in idxs]
+        idxs += remaining[: MIN_SELECTED - len(idxs)]
+        st.warning(f"Only {len(selected)} selected—added oldest to reach {MIN_SELECTED}.")
+    working = filtered.loc[idxs]
 else:
-    working_df = filtered
+    st.info(f"No selection—showing first {MIN_SELECTED} chronologically.")
+    working = filtered.head(MIN_SELECTED)
 
-# ————— 2) Paginated View of the Current Selection —————
-st.subheader(f"✉️ Viewing {len(working_df)} Emails")
-if working_df.empty:
-    st.warning("No emails to display.")
+# ————— 3) Paginated View & Lazy-Load Body —————
+st.subheader(f"✉️ Viewing {len(working)} Emails")
+if working.empty:
+    st.warning("Nothing to display.")
 else:
-    total_pages = (len(working_df) - 1) // PAGE_SIZE + 1
-    page = st.sidebar.number_input("Page", 1, total_pages, 1, help="Navigate pages of the current selection")
-    start_idx = (page - 1) * PAGE_SIZE
-    end_idx = start_idx + PAGE_SIZE
-    page_df = working_df.iloc[start_idx:end_idx]
+    pages = (len(working)-1)//PAGE_SIZE + 1
+    page = st.sidebar.number_input("Page", 1, pages, 1)
+    chunk = working.iloc[(page-1)*PAGE_SIZE : page*PAGE_SIZE]
 
-    # Show overview
-    st.dataframe(page_df[["DateTime", "From", "Subject"]], use_container_width=True)
+    # overview table
+    st.dataframe(chunk[["DateTime", "From", "Subject"]], use_container_width=True)
 
-    # Lazy-load full bodies on click
-    for _, row in page_df.iterrows():
+    # full message on demand
+    for _, row in chunk.iterrows():
         ts = row["DateTime"].strftime("%Y-%m-%d %H:%M")
-        with st.expander(f"{ts} — {row['Subject']}"):
-            st.write(f"**From:** {row['From']}")
-            if "To" in row:
-                st.write(f"**To:** {row['To']}")
-            body = row.get("Body") or row.get("Content") or "_No content_"
+        with st.expander(f"{ts} — {row.get('Subject','(no subject)')}"):
+            st.write(f"**From:** {row.get('From','')}")
+            if "To" in row: st.write(f"**To:** {row['To']}")
+            body = row.get("Body") or row.get("Content") or "_No content available_"
             st.markdown(body)

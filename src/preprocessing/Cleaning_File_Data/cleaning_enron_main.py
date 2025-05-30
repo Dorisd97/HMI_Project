@@ -2,13 +2,14 @@ import json
 import re
 from datetime import datetime
 import logging
+from src.config.config import REFINED_JSON_PATH, CLEANED_JSON_PATH
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('../../log/email_cleaning.log'),
+        logging.FileHandler('../../../log/email_cleaning.log'),
         logging.StreamHandler()
     ]
 )
@@ -276,11 +277,46 @@ def clean_email_body(body):
 
     return result, cleaning_steps, original_length, final_length, reduction_percent
 
+def clean_email_addresses(text):
+    if not text:
+        return text
+
+    parts = re.split(r'[;,]', text)
+    cleaned = []
+
+    for part in parts:
+        part = part.strip()
+        part = re.sub(r'<\s*([^<>]+?)\s*>', r'\1', part)
+        cleaned.append(part)
+
+    return ', '.join(cleaned)
+
+def format_date_to_european(date_str):
+    if not date_str:
+        return date_str
+
+    # Remove timezone info in parentheses and trailing offset
+    cleaned = re.sub(r'\s+\(.*?\)$', '', date_str.strip())
+    cleaned = re.sub(r'\s+[+-]\d{4}$', '', cleaned)
+
+    # Match and extract date + time
+    match = re.match(r'.*?(\d{1,2} \w{3} \d{4}) (\d{2}:\d{2}:\d{2})', cleaned)
+    if match:
+        date_part = match.group(1)
+        time_part = match.group(2)
+        try:
+            dt = datetime.strptime(date_part, "%d %b %Y")
+            return f"{dt.strftime('%d.%m.%Y')} {time_part}"
+        except ValueError:
+            return date_str
+
+    return date_str
+
 
 def clean_enron_emails(json_file_path, output_file_path):
-    """Main function to clean Enron emails by removing symbols and ALL leading spaces."""
+    """Main function to clean Enron emails by removing symbols, formatting dates, cleaning email addresses, and removing ALL leading spaces."""
 
-    logging.info(f"Starting aggressive symbol cleaning process")
+    logging.info(f"Starting email cleaning process")
     logging.info(f"Input file: {json_file_path}")
     logging.info(f"Output file: {output_file_path}")
 
@@ -353,7 +389,7 @@ def clean_enron_emails(json_file_path, output_file_path):
                 validation_skipped += 1
                 continue
 
-            logging.info("Email passed validation (has subject or body) - proceeding with symbol cleaning")
+            logging.info("Email passed validation (has subject or body) - proceeding with cleaning")
 
             # Create a copy of the original email to preserve all fields
             cleaned_email = email.copy()
@@ -364,22 +400,40 @@ def clean_enron_emails(json_file_path, output_file_path):
 
             logging.info(f"Original body length: {original_body_length} characters")
 
-            # Perform aggressive cleaning
+            # Perform aggressive body cleaning
             cleaned_body, cleaning_steps, orig_len, final_len, reduction_percent = clean_email_body(original_body)
 
             # Log cleaning steps
             if cleaning_steps:
-                logging.info("Aggressive cleaning steps performed:")
+                logging.info("Aggressive body cleaning steps performed:")
                 for step in cleaning_steps:
                     logging.info(f"  - {step}")
             else:
-                logging.info("No cleaning steps needed")
+                logging.info("No body cleaning steps needed")
 
             logging.info(f"Body length after cleaning: {final_len} characters")
             logging.info(f"Size reduction: {reduction_percent}%")
 
             # Update the Body field with cleaned content
             cleaned_email['Body'] = cleaned_body
+
+            # Format the Date to European format
+            try:
+                cleaned_email['Date'] = format_date_to_european(cleaned_email.get('Date', ''))
+                logging.info(f"Date formatted to European format: {cleaned_email['Date']}")
+            except Exception as e:
+                logging.warning(f"Failed to format date for email {i}: {e}")
+
+            # Clean email addresses in From, To, X-cc, X-bcc
+            email_fields = ["From", "To", "X-cc", "X-bcc"]
+            for key in email_fields:
+                if key in cleaned_email and cleaned_email[key]:
+                    try:
+                        cleaned_email[key] = clean_email_addresses(cleaned_email[key])
+                        logging.info(f"Cleaned email addresses in {key}: {cleaned_email[key]}")
+                    except Exception as e:
+                        logging.warning(f"Failed to clean {key} for email {i}: {e}")
+
             cleaned_emails.append(cleaned_email)
             processed_count += 1
 
@@ -427,7 +481,7 @@ def clean_enron_emails(json_file_path, output_file_path):
 
     # Final summary
     logging.info(f"\n{'=' * 60}")
-    logging.info("SYMBOL CLEANING PROCESS SUMMARY")
+    logging.info("EMAIL CLEANING PROCESS SUMMARY")
     logging.info(f"{'=' * 60}")
     logging.info(f"Total emails in input: {total_emails}")
     logging.info(f"Successfully processed: {processed_count}")
@@ -477,15 +531,14 @@ def clean_enron_emails(json_file_path, output_file_path):
     logging.info(f"Output file: {output_file_path}")
     if skipped_emails:
         logging.info(f"Skipped emails report: {output_file_path.replace('.json', '_skipped_report.json')}")
-    logging.info("Aggressive symbol cleaning process completed!")
+    logging.info("Email cleaning process completed!")
 
     return cleaned_emails
 
-
 # Usage
 if __name__ == "__main__":
-    input_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron.json"
-    output_file = "D:/Coding_Projects/Git_Hub_Projects/HMI_Project/data/cleaned_enron_emails_aggressive.json"
+    input_file = REFINED_JSON_PATH
+    output_file = CLEANED_JSON_PATH
 
     print("Starting aggressive symbol cleaning for Enron emails...")
     print("This version removes unnecessary symbols and ALL leading spaces")
