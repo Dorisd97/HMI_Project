@@ -12,7 +12,7 @@ st.set_page_config(layout="wide", page_title="Email Timeline & Selection")
 # ————— Constants —————
 JSON_PATH = CLEANED_JSON_PATH
 PAGE_SIZE = 50
-MIN_SELECTED = 10
+MIN_SELECTED = 1
 
 # ————— Load & Introspect JSON —————
 @st.cache_data
