@@ -32,11 +32,19 @@ def clean_email_content(content: str) -> str:
     return content
 
 
+# ————— Revised Summarization Functions —————
+
+
 def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
     """
-    Given a list of email‐dicts, call OpenAI to produce one paragraph explaining:
-      1. Why these emails were sent (purpose/intent)
-      2. What insights or conclusions can be drawn
+    Given a list of email‑dicts, call OpenAI to produce a multi‑sentence paragraph
+    that explains:
+      1. Why these emails were sent (purpose/intent connecting them).
+      2. The main topics/themes discussed.
+      3. Any key action items or decisions.
+      4. The tone or sentiment among participants.
+
+    Returns a single cohesive paragraph (3–5 sentences).
     """
     try:
         if api_key:
@@ -60,11 +68,14 @@ def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
         combined_block = "\n".join(blocks)
 
         prompt = f"""
-Below are {len(emails)} related emails. Please write a single, concise paragraph that explains:
-  1. Why these emails were sent (the underlying purpose or intent connecting them)
-  2. The most important insights, decisions, or conclusions that emerge from reading all of them
+Below are {len(emails)} related emails from a single thread (or selection). 
+Please write a detailed, multi‑sentence paragraph (approximately 4–6 sentences) that covers:
+  1. Why these emails were exchanged—i.e., the overarching purpose or problem they address.
+  2. The main topics or themes that emerge across them.
+  3. Any concrete action items, decisions, or requests mentioned.
+  4. The overall tone or sentiment among participants (e.g., collaborative, urgent, polite).
 
-Combine everything into a fluid, human‐readable paragraph. Do not list each email separately—focus on the overarching reason and takeaways.
+Do NOT list each email separately. Instead, weave everything into one cohesive paragraph.
 
 {combined_block}
 
@@ -73,7 +84,7 @@ Summary:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
+            max_tokens=400,
             temperature=0.4
         )
         return response.choices[0].message.content.strip()
@@ -84,70 +95,117 @@ Summary:
 
 def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     """
-    Fallback summary (one paragraph):
-      • Describes WHY these emails were sent (context, e.g. coordinating a project, scheduling meetings, sharing reports).
-      • Highlights any key themes or action items that emerge.
-      • Avoids listing individual senders or dates—focuses on the “big picture.”
+    Fallback summary (multi‑sentence paragraph):
+      • Attempts to infer why these emails exist (e.g. coordinating a meeting,
+        updating on a project, requesting approvals, etc.)
+      • Identifies 2–3 key themes or topics found in the bodies.
+      • Notes any clear action items or next steps.
+      • Characterizes the tone (e.g. polite, urgent, informational).
+
+    Returns one paragraph of roughly 4–5 sentences.
     """
     if not emails:
         return "No emails to summarize."
 
-    # 1) Collect all bodies into one long text for keyword scanning
+    # 1) Merge all bodies into one lowercase string for keyword scanning
     all_text = " ".join(
         clean_email_content(e.get("Body", "") or e.get("Content", ""))
         for e in emails
     ).lower()
 
-    # 2) Basic keyword checks to guess context
-    context = "General correspondence"
-    if any(k in all_text for k in ["meeting", "schedule", "calendar"]):
-        context = "A series of scheduling and meeting‐coordination emails"
+    # 2) Infer “purpose/context”
+    purpose = "These emails appear to be general correspondence."
+    if any(k in all_text for k in ["meeting", "schedule", "calendar", "reschedule"]):
+        purpose = "These messages revolve around scheduling and coordinating one or more meetings."
     elif any(k in all_text for k in ["project", "milestone", "phase", "deliverable"]):
-        context = "Project update and coordination discussions"
-    elif any(k in all_text for k in ["report", "analysis", "results"]):
-        context = "Sharing reports and analyses"
+        purpose = "They focus on providing updates and coordination for an ongoing project."
+    elif any(k in all_text for k in ["report", "analysis", "results", "data"]):
+        purpose = "The thread is primarily about sharing reports and analysis results."
     elif any(k in all_text for k in ["invoice", "billing", "payment"]):
-        context = "Financial or billing inquiries"
-    elif any(k in all_text for k in ["approval", "sign off", "authorize"]):
-        context = "Approval‐focused communications"
-    elif any(k in all_text for k in ["urgent", "asap", "immediately"]):
-        context = "Urgent requests needing prompt attention"
-    # (You can extend this block with other domain‐specific keywords if needed.)
+        purpose = "This sequence concerns billing or payment inquiries."
+    elif any(k in all_text for k in ["approval", "sign off", "authorize", "approved"]):
+        purpose = "The emails are largely about seeking or granting approvals."
 
-    # 3) Look for specific “action items” keywords
+    # 3) Identify 2–3 key themes/topics
+    themes = []
+    if "deadline" in all_text:
+        themes.append("upcoming deadlines")
+    if "follow up" in all_text or "follow‑up" in all_text:
+        themes.append("follow‑up tasks")
+    if "feedback" in all_text:
+        themes.append("requesting feedback")
+    if "update" in all_text:
+        themes.append("status updates")
+    if "budget" in all_text:
+        themes.append("budget or financial planning")
+
+    # 4) Detect action items / next steps
     actions = []
     if "action item" in all_text or "to do" in all_text:
-        actions.append("action items")
-    if "next step" in all_text or "follow up" in all_text:
-        actions.append("follow‐up tasks")
-    if "approve" in all_text:
-        actions.append("approval requests")
+        actions.append("defined action items")
+    if "please review" in all_text or "kindly review" in all_text:
+        actions.append("requests for review")
+    if "confirm" in all_text:
+        actions.append("requests to confirm details")
     if "deadline" in all_text:
-        actions.append("deadlines")
-    if "decision" in all_text:
-        actions.append("decision points")
+        actions.append("noted deadlines")
+    if "meeting" in all_text and "agenda" in all_text:
+        actions.append("agenda planning for upcoming meetings")
 
-    # Build a phrase about actions (if any)
-    action_phrase = ""
-    if actions:
-        action_phrase = " They include " + ", ".join(sorted(set(actions))) + "."
-
-    # 4) Check overall “tone” hints: are there words like “thanks,” “appreciate,” “concern,” etc.?
-    tone = "The tone is straightforward and collaborative."
+    # 5) Characterize tone
+    tone = "The tone comes across as straightforward and neutral."
     if any(w in all_text for w in ["thanks", "thank you", "appreciate"]):
-        tone = "The tone is polite and appreciative."
+        tone = "Overall, the tone seems polite and appreciative."
+    elif any(w in all_text for w in ["urgent", "asap", "immediately"]):
+        tone = "The tone indicates urgency and a need for prompt action."
     elif any(w in all_text for w in ["issue", "concern", "problem"]):
-        tone = "The tone indicates some concern or issue to address."
-    elif any(w in all_text for w in ["excited", "looking forward", "pleased"]):
-        tone = "The tone is positive and enthusiastic."
+        tone = "There is a sense of concern or troubleshooting in the tone."
 
-    # 5) Combine into one nice paragraph
-    paragraph = (
-        f"{context}. "
-        f"{tone}{action_phrase}"
-    )
+    # 6) Build a multi‑sentence paragraph
+    sentences = []
+    sentences.append(purpose)
 
+    if themes:
+        theme_sentence = (
+            "Key themes include “" + ", ".join(themes[:2]) + "”"
+            + (" and other related topics." if len(themes) > 2 else ".")
+        )
+        sentences.append(theme_sentence)
+    else:
+        sentences.append("No strong topic emerged beyond the primary purpose.")
+
+    if actions:
+        action_sentence = (
+            "The emails outline "
+            + ", ".join(actions[:2])
+            + (" and other follow‑up tasks." if len(actions) > 2 else ".")
+        )
+        sentences.append(action_sentence)
+    else:
+        sentences.append("There are no explicit action items spelled out.")
+
+    sentences.append(tone)
+
+    # Join into one paragraph
+    paragraph = " ".join(sentences).strip()
     return paragraph
+
+
+
+def summarize_all_selected(
+    emails: List[Dict],
+    use_ai: bool,
+    method: str,
+    api_key: str = None
+) -> str:
+    """
+    Wrapper that chooses AI vs. simple for the entire list of selected emails.
+    Returns one multi‐sentence paragraph.
+    """
+    if use_ai and method == "OpenAI GPT" and api_key:
+        return summarize_emails_paragraph_openai(emails, api_key)
+    else:
+        return summarize_emails_paragraph_simple(emails)
 
 
 def summarize_all_selected(
