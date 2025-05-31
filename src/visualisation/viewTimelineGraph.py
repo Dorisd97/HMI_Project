@@ -18,100 +18,135 @@ PAGE_SIZE = 50
 MIN_SELECTED = 1
 
 
-# ————— AI / Simple Paragraph Summary Functions —————
+# ————— Cleaning & Summarization Helpers —————
 def clean_email_content(content: str) -> str:
     """Clean email content for better AI processing."""
     if not content:
         return ""
-    # Remove excessive whitespace
+    # Collapse whitespace
     content = re.sub(r'\s+', ' ', content.strip())
-    # Remove common “On ... wrote:” and forwarded chains
+    # Remove quoted replies/headers
     content = re.sub(r'On .* wrote:', '', content)
     content = re.sub(r'From:.*?Subject:', '', content, flags=re.DOTALL)
     content = re.sub(r'-----Original Message-----.*', '', content, flags=re.DOTALL)
     return content
 
 
-def summarize_single_email_openai(email: Dict, api_key: str) -> str:
+def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
     """
-    Calls OpenAI to generate a single‐paragraph summary of exactly one email.
+    Given a list of email‐dicts, call OpenAI to produce a single‐paragraph summary
+    that captures the main themes, important actions, and overall tone.
     """
     try:
         if api_key:
             openai.api_key = api_key
 
-        sender = email.get("From", "Unknown Sender")
-        subject = email.get("Subject", "No Subject")
-        dt = email.get("DateTime", "Unknown Date")
-        # If DateTime is a pandas Timestamp, convert to string
-        if hasattr(dt, "strftime"):
-            dt = dt.strftime("%Y-%m-%d %H:%M")
-        raw_body = email.get("Body", "") or email.get("Content", "")
-        body = clean_email_content(raw_body)
+        # Build a combined block of all emails
+        blocks = []
+        for i, email in enumerate(emails, start=1):
+            sender = email.get("From", "Unknown Sender")
+            subject = email.get("Subject", "No Subject")
+            dt = email.get("DateTime", "Unknown Date")
+            if hasattr(dt, "strftime"):
+                dt = dt.strftime("%Y-%m-%d %H:%M")
+            raw_body = email.get("Body", "") or email.get("Content", "")
+            body = clean_email_content(raw_body)
 
-        # Build a simple prompt for one‐paragraph summary
+            blocks.append(
+                f"---\nEmail {i}:\nFrom: {sender}\nSubject: {subject}\nDate: {dt}\n\n{body}\n"
+            )
+
+        combined_block = "\n".join(blocks)
+
         prompt = f"""
-Below is an email. Please write a concise, one‐paragraph summary that captures:
-  • key points and any requested actions  
-  • overall tone / sentiment  
+Below are {len(emails)} emails. Please write a concise, single‐paragraph summary that covers:
+  • The main topics or themes discussed across these emails  
+  • Any key decisions or action items mentioned  
+  • Overall sentiment or tone  
 
----  
-From: {sender}  
-Subject: {subject}  
-Date: {dt}  
+Do not list each email separately—just give one unified paragraph.
 
-{body}
+{combined_block}
 
 Summary:
 """
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=250,
+            max_tokens=300,
             temperature=0.3
         )
         return response.choices[0].message.content.strip()
+
     except Exception as e:
         return f"❌ Error generating AI summary: {str(e)}"
 
 
-def summarize_single_email_simple(email: Dict) -> str:
+def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     """
-    Very basic fallback: grab sender/subject/date and first ~40 words of cleaned body.
+    Fallback if AI is disabled or no API key:
+    produce one ‘paragraph’ by merging the simple‐analysis output.
     """
-    sender = email.get("From", "Unknown Sender")
-    subject = email.get("Subject", "No Subject")
-    dt = email.get("DateTime", "Unknown Date")
-    if hasattr(dt, "strftime"):
-        dt = dt.strftime("%Y-%m-%d %H:%M")
-    raw_body = email.get("Body", "") or email.get("Content", "")
-    body = clean_email_content(raw_body)
-    # Take first 40 words as “summary”
-    tokens = body.split()
-    snippet = " ".join(tokens[:40]) + ("..." if len(tokens) > 40 else "")
-    paragraph = (
-        f"This email was sent by {sender} on {dt} (Subject: “{subject}”). "
-        f"Content preview: “{snippet}”"
+    if not emails:
+        return "No emails to summarize."
+
+    # Use the existing simple summary, then collapse line breaks into spaces
+    # so that it reads as a single paragraph.
+    # (You can refine this if you want more sophisticated heuristic.)
+    summary_parts = []
+
+    # Count & date range
+    summary_parts.append(f"({len(emails)} emails)")
+    dates = [e.get("DateTime") for e in emails if e.get("DateTime")]
+    if dates:
+        parsed = []
+        for d in dates:
+            if hasattr(d, "strftime"):
+                parsed.append(d.strftime("%Y-%m-%d"))
+            else:
+                parsed.append(str(d))
+        summary_parts.append(f"Date range: {min(parsed)} to {max(parsed)}")
+
+    # Senders
+    senders = sorted({e.get("From", "Unknown") for e in emails})
+    summary_parts.append(f"Senders: {', '.join(senders)}")
+
+    # Subjects
+    subjects = [e.get("Subject", "") for e in emails if e.get("Subject")]
+    summary_parts.append(f"{len(set(subjects))} unique subject(s)")
+
+    # Basic keyword sniff
+    all_text = " ".join(
+        clean_email_content(e.get("Body", "") or e.get("Content", ""))
+        for e in emails
     )
-    return paragraph
+    common_words = ['meeting', 'project', 'update', 'urgent', 'deadline', 'review', 'approval']
+    found = sorted({w for w in common_words if w.lower() in all_text.lower()})
+    if found:
+        summary_parts.append(f"Key terms found: {', '.join(found)}")
+
+    # Merge into one paragraph
+    para = " • ".join(summary_parts)
+    return para
 
 
-def summarize_single_email(
-    email: Dict,
+def summarize_all_selected(
+    emails: List[Dict],
     use_ai: bool,
     method: str,
     api_key: str = None
 ) -> str:
     """
-    Wrapper that picks AI vs. simple. Returns exactly one paragraph.
+    Wrapper that chooses AI vs. simple for the entire list of selected emails.
+    Returns a single paragraph string.
     """
     if use_ai and method == "OpenAI GPT" and api_key:
-        return summarize_single_email_openai(email, api_key)
+        return summarize_emails_paragraph_openai(emails, api_key)
     else:
-        return summarize_single_email_simple(email)
+        return summarize_emails_paragraph_simple(emails)
 
 
-# ————— Load & Introspect JSON —————
+# ————— Load & Normalize JSON —————
 @st.cache_data
 def load_raw(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -125,8 +160,8 @@ if not isinstance(raw, list) or len(raw) == 0:
 
 df = pd.json_normalize(raw)
 
-# Find date‐like columns
-candidates = [c for c in df.columns if any(k in c.lower() for k in ("date", "time", "timestamp"))]
+# Find any date‐like column
+candidates = [col for col in df.columns if any(k in col.lower() for k in ("date", "time", "timestamp"))]
 if not candidates:
     st.error("No date‐like field found in your JSON.")
     st.stop()
@@ -138,6 +173,7 @@ if df.empty:
     st.error(f"Could not parse any dates from field `{date_col}`.")
     st.stop()
 
+
 # ————— Sidebar Configuration —————
 st.sidebar.header("🔍 Filters")
 
@@ -147,7 +183,7 @@ use_ai_summary = st.sidebar.checkbox("Enable AI Summary", value=True)
 summary_method = st.sidebar.selectbox(
     "Summary Method",
     ["Simple Analysis", "OpenAI GPT", "Custom AI Service"],
-    help="Choose how to generate each email’s paragraph‐summary"
+    help="Choose how to generate the summary of all selected emails"
 )
 
 openai_api_key = None
@@ -155,10 +191,10 @@ if summary_method == "OpenAI GPT":
     openai_api_key = st.sidebar.text_input(
         "OpenAI API Key",
         type="password",
-        help="Enter your OpenAI API key for AI‐powered summaries"
+        help="Enter your OpenAI API key for AI‐powered summary"
     )
 
-# Date and filter controls
+# Date & Sender Filters
 valid_dates = df["DateTime"]
 min_date = valid_dates.min().date()
 max_date = valid_dates.max().date()
@@ -174,17 +210,21 @@ senders = sorted(df.get("From", pd.Series(["(unknown)"])).fillna("(unknown)").un
 selected_senders = st.sidebar.multiselect("Sender", senders, default=senders)
 subject_kw = st.sidebar.text_input("Subject contains")
 
+
+# Apply filters
 mask = (
     df["DateTime"].dt.date.between(start_date, end_date) &
     df.get("From", "").isin(selected_senders)
 )
 if subject_kw:
     mask &= df.get("Subject", "").str.contains(subject_kw, case=False, na=False)
+
 filtered = df[mask]
+
 
 # ————— 1) Interactive Timeline —————
 st.subheader("📈 Select Emails on the Timeline")
-st.write("💡 **Tip**: Use the lasso or box select tool to choose emails for analysis")
+st.write("💡 **Tip**: Use the lasso or box select tool to choose emails for a combined summary.")
 
 fig = px.scatter(
     filtered,
@@ -192,7 +232,7 @@ fig = px.scatter(
     y="From",
     hover_data=["Subject"],
     render_mode="webgl",
-    title="Drag a box or lasso to select emails for analysis",
+    title="Drag a box or lasso to select emails for summary",
     height=350,
 )
 fig.update_traces(marker={"size": 8, "opacity": 0.7})
@@ -204,6 +244,7 @@ fig.update_layout(
 
 selected = plotly_events(fig, select_event=True, override_height=350)
 
+
 # ————— 2) Build Working Set (≥ MIN_SELECTED) —————
 if selected:
     idxs = [pt["pointIndex"] for pt in selected]
@@ -212,12 +253,32 @@ if selected:
         idxs += remaining[: MIN_SELECTED - len(idxs)]
         st.warning(f"Only {len(selected)} selected—added oldest to reach {MIN_SELECTED}.")
     working = filtered.loc[idxs]
-    st.success(f"✅ {len(idxs)} emails selected for analysis")
+    st.success(f"✅ {len(idxs)} emails selected for summary")
 else:
     st.info(f"No selection—showing first {MIN_SELECTED} chronologically.")
     working = filtered.head(MIN_SELECTED)
 
-# ————— 3) Charts and Visualizations —————
+
+# ————— 3) Summary of All Selected Emails —————
+st.subheader("📝 Combined Summary of Selected Emails")
+if working.empty:
+    st.warning("No emails selected for summarization.")
+else:
+    # Convert DataFrame rows to dictionaries
+    email_records = working.to_dict("records")
+
+    # Automatically generate a single‐paragraph summary
+    summary_text = summarize_all_selected(
+        emails=email_records,
+        use_ai=use_ai_summary,
+        method=summary_method,
+        api_key=openai_api_key
+    )
+
+    st.markdown(summary_text)
+
+
+# ————— 4) Charts and Visualizations —————
 col1, col2 = st.columns(2)
 
 with col1:
@@ -253,7 +314,8 @@ with col2:
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
-# ————— 4) Heatmap: Hour vs Day of Week —————
+
+# ————— 5) Heatmap: Hour vs Day of Week —————
 st.subheader("🔥 Email Traffic Heatmap")
 if not filtered.empty:
     heat = filtered.assign(
@@ -274,14 +336,15 @@ if not filtered.empty:
     fig_heat.update_layout(xaxis_title="Hour of Day", yaxis_title="Day of Week")
     st.plotly_chart(fig_heat, use_container_width=True)
 
-# ————— 5) Detailed Email View (auto‐summary) —————
+
+# ————— 6) Detailed Email View (List Only, No Per-Email Summary) —————
 st.subheader(f"✉️ Email Details ({len(working)} selected)")
 if working.empty:
     st.warning("Nothing to display.")
 else:
     pages = (len(working) - 1) // PAGE_SIZE + 1
     page = st.sidebar.number_input("Page", 1, pages, 1)
-    chunk = working.iloc[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+    chunk = working.iloc[(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
 
     display_cols = ["DateTime", "From", "Subject"]
     if "To" in chunk.columns:
@@ -294,7 +357,7 @@ else:
 
     for _, row in chunk.iterrows():
         ts = row["DateTime"].strftime("%Y-%m-%d %H:%M")
-        subject = row.get('Subject', '(no subject)')
+        subject = row.get("Subject", "(no subject)")
 
         with st.expander(f"📧 {ts} — {subject}"):
             col1, col2 = st.columns([1, 1])
@@ -313,19 +376,3 @@ else:
             word_count = len(body.split()) if body != "_No content available_" else 0
             st.write(f"**Content** ({word_count} words):")
             st.markdown(body)
-
-            # ——— Automatically generate a one‐paragraph summary ———
-            email_dict = row.to_dict()
-            # Convert DateTime to string if Timestamp
-            if hasattr(email_dict["DateTime"], "strftime"):
-                email_dict["DateTime"] = email_dict["DateTime"].strftime("%Y-%m-%d %H:%M")
-
-            summary_text = summarize_single_email(
-                email=email_dict,
-                use_ai=use_ai_summary,
-                method=summary_method,
-                api_key=openai_api_key
-            )
-
-            st.markdown("**📝 Summary (one paragraph):**")
-            st.markdown(summary_text)
