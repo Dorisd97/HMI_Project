@@ -26,16 +26,16 @@ if not isinstance(raw, list) or len(raw) == 0:
     st.stop()
 
 # show user the keys in a sample record
-st.sidebar.markdown("**JSON sample keys:**")
-st.sidebar.write(list(raw[0].keys()))
+# st.sidebar.markdown("**JSON sample keys:**")
+# st.sidebar.write(list(raw[0].keys()))
 
 # flatten into DataFrame
 df = pd.json_normalize(raw)
 
 # find date-like columns
 candidates = [c for c in df.columns if any(k in c.lower() for k in ("date","time","timestamp"))]
-st.sidebar.markdown("**Date-like columns:**")
-st.sidebar.write(candidates)
+# st.sidebar.markdown("**Date-like columns:**")
+# st.sidebar.write(candidates)
 
 if not candidates:
     st.error("No date-like field found in your JSON.")
