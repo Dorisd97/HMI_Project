@@ -20,17 +20,122 @@ MIN_SELECTED = 1
 
 # ————— Cleaning & Summarization Helpers —————
 def clean_email_content(content: str) -> str:
-    """Clean email content for better AI processing."""
+    """
+    Clean email content for better AI processing.
+    - Collapse multiple whitespace characters into single spaces.
+    - Strip out common quoted‐reply artifacts (e.g., 'On ... wrote:' lines).
+    """
     if not content:
         return ""
-    # Collapse whitespace
+    # Collapse excessive whitespace
     content = re.sub(r'\s+', ' ', content.strip())
-    # Remove quoted replies/headers
+    # Remove quoted‐reply headers and forwarded blocks
     content = re.sub(r'On .* wrote:', '', content)
     content = re.sub(r'From:.*?Subject:', '', content, flags=re.DOTALL)
     content = re.sub(r'-----Original Message-----.*', '', content, flags=re.DOTALL)
     return content
 
+def summarize_single_email_openai(email: Dict, api_key: str) -> str:
+    """
+    Generate a concise, one‐paragraph summary of a single email using OpenAI GPT.
+
+    Parameters:
+        email (Dict): A dictionary with keys like "From", "Subject", "DateTime", and "Body"/"Content".
+        api_key (str): Your OpenAI API key.
+
+    Returns:
+        str: A one‐paragraph summary capturing key points, requested actions, and overall tone.
+    """
+    try:
+        if api_key:
+            openai.api_key = api_key
+
+        sender = email.get("From", "Unknown Sender")
+        subject = email.get("Subject", "No Subject")
+        dt = email.get("DateTime", "Unknown Date")
+        # If DateTime is a pandas.Timestamp, convert to string
+        if hasattr(dt, "strftime"):
+            dt = dt.strftime("%Y-%m-%d %H:%M")
+
+        raw_body = email.get("Body", "") or email.get("Content", "")
+        body = clean_email_content(raw_body)
+
+        prompt = f"""
+Below is an email. Please write a concise, one‐paragraph summary that captures:
+  • The key points discussed and any requested actions or next steps.
+  • The overall tone or sentiment of the message.
+
+---
+From: {sender}
+Subject: {subject}
+Date: {dt}
+
+{body}
+
+Summary:
+"""
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=250,
+            temperature=0.3
+        )
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        return f"❌ Error generating AI summary: {str(e)}"
+
+
+def summarize_single_email_simple(email: Dict) -> str:
+    """
+    Fallback summary if AI is disabled or no API key is provided.
+    Produces a simple, human‐readable paragraph with:
+      - Sender, Subject, and Date
+      - A 40‐word preview of the cleaned email body
+
+    Returns:
+        str: A short paragraph previewing the email.
+    """
+    sender = email.get("From", "Unknown Sender")
+    subject = email.get("Subject", "No Subject")
+    dt = email.get("DateTime", "Unknown Date")
+    if hasattr(dt, "strftime"):
+        dt = dt.strftime("%Y-%m-%d %H:%M")
+
+    raw_body = email.get("Body", "") or email.get("Content", "")
+    body = clean_email_content(raw_body)
+    tokens = body.split()
+    snippet = " ".join(tokens[:40]) + ("..." if len(tokens) > 40 else "")
+
+    paragraph = (
+        f"This email was sent by {sender} on {dt} (Subject: “{subject}”). "
+        f"Content preview: “{snippet}”"
+    )
+    return paragraph
+
+
+def summarize_single_email(
+    email: Dict,
+    use_ai: bool,
+    method: str,
+    api_key: str = None
+) -> str:
+    """
+    Wrapper that chooses between the OpenAI‐powered summary and the simple fallback.
+
+    Parameters:
+        email (Dict): A dictionary representing a single email.
+        use_ai (bool): Whether to attempt AI summarization.
+        method (str): Should be "OpenAI GPT" to use the OpenAI path; otherwise, falls back.
+        api_key (str, optional): Your OpenAI API key (required if method == "OpenAI GPT").
+
+    Returns:
+        str: A one‐paragraph, human‐readable summary of the email.
+    """
+    if use_ai and method == "OpenAI GPT" and api_key:
+        return summarize_single_email_openai(email, api_key)
+    else:
+        return summarize_single_email_simple(email)
 
 # ————— Revised Summarization Functions —————
 
@@ -410,7 +515,7 @@ if not filtered.empty:
     st.plotly_chart(fig_heat, use_container_width=True)
 
 
-# ————— 6) Detailed Email View (List Only, No Per-Email Summary) —————
+# ————— 6) Detailed Email View (with Expander + “Show Body” toggle) —————
 st.subheader(f"✉️ Email Details ({len(working)} selected)")
 if working.empty:
     st.warning("Nothing to display.")
@@ -419,6 +524,7 @@ else:
     page = st.sidebar.number_input("Page", 1, pages, 1)
     chunk = working.iloc[(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
 
+    # Display a small table of metadata first
     display_cols = ["DateTime", "From", "Subject"]
     if "To" in chunk.columns:
         display_cols.append("To")
@@ -428,11 +534,14 @@ else:
         use_container_width=True
     )
 
-    for _, row in chunk.iterrows():
+    # Iterate over each row and wrap in an expander
+    for idx, row in chunk.iterrows():
         ts = row["DateTime"].strftime("%Y-%m-%d %H:%M")
         subject = row.get("Subject", "(no subject)")
 
-        with st.expander(f"📧 {ts} — {subject}"):
+        # 1) Create an expander per email
+        with st.expander(f"📧 {ts} — {subject}", expanded=False):
+            # 2) Show metadata (From, To, Cc, Message ID)
             col1, col2 = st.columns([1, 1])
             with col1:
                 st.write(f"**From:** {row.get('From', 'Unknown')}")
@@ -445,7 +554,26 @@ else:
                 if "MessageId" in row and pd.notna(row["MessageId"]):
                     st.write(f"**Message ID:** {row['MessageId'][:50]}...")
 
-            body = row.get("Body") or row.get("Content") or "_No content available_"
-            word_count = len(body.split()) if body != "_No content available_" else 0
-            st.write(f"**Content** ({word_count} words):")
-            st.markdown(body)
+            # 3) Always display the detailed summary paragraph
+            email_dict = row.to_dict()
+            if hasattr(email_dict["DateTime"], "strftime"):
+                email_dict["DateTime"] = email_dict["DateTime"].strftime("%Y-%m-%d %H:%M")
+
+            summary_text = summarize_single_email(
+                email=email_dict,
+                use_ai=use_ai_summary,
+                method=summary_method,
+                api_key=openai_api_key
+            )
+            st.markdown("**📝 Detailed Summary:**")
+            st.markdown(summary_text)
+
+            # 4) “Show Body” button to reveal the full email content on demand
+            show_body_key = f"show_body_{idx}"
+            if st.button("Show Body", key=show_body_key):
+                raw_body = row.get("Body") or row.get("Content") or "_No content available_"
+                word_count = len(raw_body.split()) if raw_body != "_No content available_" else 0
+
+                st.write(f"**Content** ({word_count} words):")
+                st.markdown(raw_body)
+
