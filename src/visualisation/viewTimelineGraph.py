@@ -84,57 +84,69 @@ Summary:
 
 def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     """
-    Fallback summary:
-    - States why the emails likely exist (e.g., project updates, scheduling, approvals).
-    - Provides a few key observations (e.g., most frequent sender, any urgent terms).
-    All merged into one short paragraph.
+    Fallback summary (one paragraph):
+      • Describes WHY these emails were sent (context, e.g. coordinating a project, scheduling meetings, sharing reports).
+      • Highlights any key themes or action items that emerge.
+      • Avoids listing individual senders or dates—focuses on the “big picture.”
     """
     if not emails:
         return "No emails to summarize."
 
-    # Determine date range and senders
-    dates = [e.get("DateTime") for e in emails if e.get("DateTime")]
-    if dates:
-        parsed = []
-        for d in dates:
-            if hasattr(d, "strftime"):
-                parsed.append(d.strftime("%Y-%m-%d"))
-            else:
-                parsed.append(str(d))
-        date_range = f"{min(parsed)} to {max(parsed)}"
-    else:
-        date_range = "unknown dates"
-
-    senders = sorted({e.get("From", "Unknown") for e in emails})
-    sender_summary = f"Emails from: {', '.join(senders)}."
-
-    # Count how many mention “urgent” or “deadline”
+    # 1) Collect all bodies into one long text for keyword scanning
     all_text = " ".join(
         clean_email_content(e.get("Body", "") or e.get("Content", ""))
         for e in emails
-    )
-    urgent_terms = []
-    for term in ["urgent", "deadline", "important"]:
-        if term in all_text.lower():
-            urgent_terms.append(term)
-    urgent_summary = (
-        f"Appears urgency: {', '.join(urgent_terms)}."
-        if urgent_terms
-        else "No immediate urgency detected."
-    )
+    ).lower()
 
-    # Guess purpose by looking at common keywords
-    purpose = "Likely project updates or coordination emails."
-    if "meeting" in all_text.lower():
-        purpose = "Primarily meeting scheduling and follow‐ups."
-    elif "report" in all_text.lower():
-        purpose = "Sharing status reports and results."
+    # 2) Basic keyword checks to guess context
+    context = "General correspondence"
+    if any(k in all_text for k in ["meeting", "schedule", "calendar"]):
+        context = "A series of scheduling and meeting‐coordination emails"
+    elif any(k in all_text for k in ["project", "milestone", "phase", "deliverable"]):
+        context = "Project update and coordination discussions"
+    elif any(k in all_text for k in ["report", "analysis", "results"]):
+        context = "Sharing reports and analyses"
+    elif any(k in all_text for k in ["invoice", "billing", "payment"]):
+        context = "Financial or billing inquiries"
+    elif any(k in all_text for k in ["approval", "sign off", "authorize"]):
+        context = "Approval‐focused communications"
+    elif any(k in all_text for k in ["urgent", "asap", "immediately"]):
+        context = "Urgent requests needing prompt attention"
+    # (You can extend this block with other domain‐specific keywords if needed.)
 
-    # Build one paragraph
+    # 3) Look for specific “action items” keywords
+    actions = []
+    if "action item" in all_text or "to do" in all_text:
+        actions.append("action items")
+    if "next step" in all_text or "follow up" in all_text:
+        actions.append("follow‐up tasks")
+    if "approve" in all_text:
+        actions.append("approval requests")
+    if "deadline" in all_text:
+        actions.append("deadlines")
+    if "decision" in all_text:
+        actions.append("decision points")
+
+    # Build a phrase about actions (if any)
+    action_phrase = ""
+    if actions:
+        action_phrase = " They include " + ", ".join(sorted(set(actions))) + "."
+
+    # 4) Check overall “tone” hints: are there words like “thanks,” “appreciate,” “concern,” etc.?
+    tone = "The tone is straightforward and collaborative."
+    if any(w in all_text for w in ["thanks", "thank you", "appreciate"]):
+        tone = "The tone is polite and appreciative."
+    elif any(w in all_text for w in ["issue", "concern", "problem"]):
+        tone = "The tone indicates some concern or issue to address."
+    elif any(w in all_text for w in ["excited", "looking forward", "pleased"]):
+        tone = "The tone is positive and enthusiastic."
+
+    # 5) Combine into one nice paragraph
     paragraph = (
-        f"Between {date_range}, {sender_summary} "
-        f"{purpose} {urgent_summary}"
+        f"{context}. "
+        f"{tone}{action_phrase}"
     )
+
     return paragraph
 
 
@@ -280,8 +292,6 @@ else:
         api_key=openai_api_key
     )
     st.markdown(summary_text)
-
-
 
 # ————— 4) Charts and Visualizations —————
 col1, col2 = st.columns(2)
