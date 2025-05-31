@@ -10,5 +10,6 @@ LOG_FILE_PATH = os.path.join(BASE_DIR, 'log', 'deleted_duplicates_log.txt')
 REFINED_CSV_PATH = os.path.join(BASE_DIR, 'data', 'refined_enron_emails.csv')
 REFINED_JSON_PATH = os.path.join(BASE_DIR, 'data', 'refined_enron.json')
 CLEANED_JSON_PATH = os.path.join(BASE_DIR, 'data', 'cleaned_enron.json')
+EXTRACTED_ENTITIES_JSON_PATH = os.path.join(BASE_DIR, 'data', 'enron_entities.json')
 #BODY_CHAIN_OUTPUT_PATH = os.path.join(BASE_DIR, 'data', 'processed_body_chain_output.json')
 
