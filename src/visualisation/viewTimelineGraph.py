@@ -34,8 +34,9 @@ def clean_email_content(content: str) -> str:
 
 def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
     """
-    Given a list of email‐dicts, call OpenAI to produce a single‐paragraph summary
-    that captures the main themes, important actions, and overall tone.
+    Given a list of email‐dicts, call OpenAI to produce one paragraph explaining:
+      1. Why these emails were sent (purpose/intent)
+      2. What insights or conclusions can be drawn
     """
     try:
         if api_key:
@@ -59,12 +60,11 @@ def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
         combined_block = "\n".join(blocks)
 
         prompt = f"""
-Below are {len(emails)} emails. Please write a concise, single‐paragraph summary that covers:
-  • The main topics or themes discussed across these emails  
-  • Any key decisions or action items mentioned  
-  • Overall sentiment or tone  
+Below are {len(emails)} related emails. Please write a single, concise paragraph that explains:
+  1. Why these emails were sent (the underlying purpose or intent connecting them)
+  2. The most important insights, decisions, or conclusions that emerge from reading all of them
 
-Do not list each email separately—just give one unified paragraph.
+Combine everything into a fluid, human‐readable paragraph. Do not list each email separately—focus on the overarching reason and takeaways.
 
 {combined_block}
 
@@ -74,7 +74,7 @@ Summary:
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300,
-            temperature=0.3
+            temperature=0.4
         )
         return response.choices[0].message.content.strip()
 
@@ -84,19 +84,15 @@ Summary:
 
 def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     """
-    Fallback if AI is disabled or no API key:
-    produce one ‘paragraph’ by merging the simple‐analysis output.
+    Fallback summary:
+    - States why the emails likely exist (e.g., project updates, scheduling, approvals).
+    - Provides a few key observations (e.g., most frequent sender, any urgent terms).
+    All merged into one short paragraph.
     """
     if not emails:
         return "No emails to summarize."
 
-    # Use the existing simple summary, then collapse line breaks into spaces
-    # so that it reads as a single paragraph.
-    # (You can refine this if you want more sophisticated heuristic.)
-    summary_parts = []
-
-    # Count & date range
-    summary_parts.append(f"({len(emails)} emails)")
+    # Determine date range and senders
     dates = [e.get("DateTime") for e in emails if e.get("DateTime")]
     if dates:
         parsed = []
@@ -105,29 +101,41 @@ def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
                 parsed.append(d.strftime("%Y-%m-%d"))
             else:
                 parsed.append(str(d))
-        summary_parts.append(f"Date range: {min(parsed)} to {max(parsed)}")
+        date_range = f"{min(parsed)} to {max(parsed)}"
+    else:
+        date_range = "unknown dates"
 
-    # Senders
     senders = sorted({e.get("From", "Unknown") for e in emails})
-    summary_parts.append(f"Senders: {', '.join(senders)}")
+    sender_summary = f"Emails from: {', '.join(senders)}."
 
-    # Subjects
-    subjects = [e.get("Subject", "") for e in emails if e.get("Subject")]
-    summary_parts.append(f"{len(set(subjects))} unique subject(s)")
-
-    # Basic keyword sniff
+    # Count how many mention “urgent” or “deadline”
     all_text = " ".join(
         clean_email_content(e.get("Body", "") or e.get("Content", ""))
         for e in emails
     )
-    common_words = ['meeting', 'project', 'update', 'urgent', 'deadline', 'review', 'approval']
-    found = sorted({w for w in common_words if w.lower() in all_text.lower()})
-    if found:
-        summary_parts.append(f"Key terms found: {', '.join(found)}")
+    urgent_terms = []
+    for term in ["urgent", "deadline", "important"]:
+        if term in all_text.lower():
+            urgent_terms.append(term)
+    urgent_summary = (
+        f"Appears urgency: {', '.join(urgent_terms)}."
+        if urgent_terms
+        else "No immediate urgency detected."
+    )
 
-    # Merge into one paragraph
-    para = " • ".join(summary_parts)
-    return para
+    # Guess purpose by looking at common keywords
+    purpose = "Likely project updates or coordination emails."
+    if "meeting" in all_text.lower():
+        purpose = "Primarily meeting scheduling and follow‐ups."
+    elif "report" in all_text.lower():
+        purpose = "Sharing status reports and results."
+
+    # Build one paragraph
+    paragraph = (
+        f"Between {date_range}, {sender_summary} "
+        f"{purpose} {urgent_summary}"
+    )
+    return paragraph
 
 
 def summarize_all_selected(
@@ -264,18 +272,15 @@ st.subheader("📝 Combined Summary of Selected Emails")
 if working.empty:
     st.warning("No emails selected for summarization.")
 else:
-    # Convert DataFrame rows to dictionaries
     email_records = working.to_dict("records")
-
-    # Automatically generate a single‐paragraph summary
     summary_text = summarize_all_selected(
         emails=email_records,
         use_ai=use_ai_summary,
         method=summary_method,
         api_key=openai_api_key
     )
-
     st.markdown(summary_text)
+
 
 
 # ————— 4) Charts and Visualizations —————
