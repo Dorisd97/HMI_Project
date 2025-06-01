@@ -3,10 +3,13 @@ import pandas as pd
 import plotly.express as px
 from streamlit_plotly_events import plotly_events
 import json
-from datetime import date
-import openai
-from typing import List, Dict
 import re
+from datetime import date
+from typing import List, Dict
+
+# Import LangChain’s Ollama wrapper
+from langchain.llms import Ollama
+
 from src.config.config import CLEANED_JSON_PATH
 
 # ————— Page Config —————
@@ -17,6 +20,13 @@ JSON_PATH = CLEANED_JSON_PATH
 PAGE_SIZE = 50
 MIN_SELECTED = 1
 
+# ————— Instantiate the Ollama LLM —————
+# Assumes Ollama is running locally (default port 11434) and has the "mistral" model available.
+llm = Ollama(
+    model="mistral",
+    base_url="http://localhost:11434",  # adjust if your Ollama REST endpoint is different
+    verbose=False
+)
 
 # ————— Cleaning & Summarization Helpers —————
 def clean_email_content(content: str) -> str:
@@ -35,21 +45,17 @@ def clean_email_content(content: str) -> str:
     content = re.sub(r'-----Original Message-----.*', '', content, flags=re.DOTALL)
     return content
 
-def summarize_single_email_openai(email: Dict, api_key: str) -> str:
+def summarize_single_email_ollama(email: Dict) -> str:
     """
-    Generate a concise, one‐paragraph summary of a single email using OpenAI GPT.
+    Generate a concise, one‐paragraph summary of a single email using Ollama’s Mistral model via LangChain.
 
     Parameters:
         email (Dict): A dictionary with keys like "From", "Subject", "DateTime", and "Body"/"Content".
-        api_key (str): Your OpenAI API key.
 
     Returns:
         str: A one‐paragraph summary capturing key points, requested actions, and overall tone.
     """
     try:
-        if api_key:
-            openai.api_key = api_key
-
         sender = email.get("From", "Unknown Sender")
         subject = email.get("Subject", "No Subject")
         dt = email.get("DateTime", "Unknown Date")
@@ -74,22 +80,87 @@ Date: {dt}
 
 Summary:
 """
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=250,
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
+        # Use the Ollama LLM to get a completion
+        response = llm(prompt)
+        return response.strip()
 
     except Exception as e:
         return f"❌ Error generating AI summary: {str(e)}"
 
+def summarize_emails_detailed_ollama(emails: List[Dict]) -> str:
+    """
+    Given a list of email‐dicts, call Ollama’s Mistral model to produce a detailed, multi‐section summary that covers:
+      1. A deeper explanation of each email’s content.
+      2. Key keywords/phrases and why they matter.
+      3. Communication pattern: who is replying to whom, any CC chains, decision‐making flow.
+      4. The overarching purpose or trigger for this thread.
+      5. Findings, conclusions, or next‐step implications.
+      6. Tone and sentiment analysis.
+
+    Returns one long, cohesive response. If something fails, returns an error string.
+    """
+    try:
+        # 1. Build a combined block of all emails
+        blocks = []
+        for i, email in enumerate(emails, start=1):
+            sender = email.get("From", "Unknown Sender")
+            subject = email.get("Subject", "No Subject")
+            dt = email.get("DateTime", "Unknown Date")
+            if hasattr(dt, "strftime"):
+                dt = dt.strftime("%Y-%m-%d %H:%M")
+            raw_body = email.get("Body", "") or email.get("Content", "")
+            # Reuse cleaning steps
+            body = re.sub(r'\s+', ' ', raw_body.strip())
+            body = re.sub(r'On .* wrote:', '', body)
+            body = re.sub(r'From:.*?Subject:', '', body, flags=re.DOTALL)
+            body = re.sub(r'-----Original Message-----.*', '', body, flags=re.DOTALL)
+
+            blocks.append(
+                f"---\nEmail {i}:\nFrom: {sender}\nSubject: {subject}\nDate: {dt}\n\n{body}\n"
+            )
+
+        combined_block = "\n".join(blocks)
+
+        # 2. Write a more prescriptive prompt
+        prompt = f"""
+Below are {len(emails)} related emails (a thread or selection). Provide a single, cohesive deep analysis that includes all of the following:
+
+1. **Detailed Overview of Each Email**  
+   For each message in chronological order, summarize its content in 2–3 sentences. Mention who said what and any explicit requests or decisions.
+
+2. **Key Keywords and Their Importance**  
+   Identify 5–7 keywords or phrases that recur (e.g., “budget,” “deadline,” “action item”). For each keyword, explain why it was important in this thread.
+
+3. **Communication Pattern**  
+   Describe how participants are interacting (e.g., “Alice replied directly to Bob’s budget question, CC’ing finance@company.com,” “This thread branches into two sub‐conversations after the third message,” etc.). Note any loops or decision flows.
+
+4. **Overall Purpose / Why This Thread Was Started**  
+   Explain what triggered this entire exchange.
+
+5. **Findings and Conclusions**  
+   Based on the content, what can a reader conclude? E.g., “They have agreed to a $50k budget, pending final sign‐off.” Or “No clear decision was reached.”
+
+6. **Tone and Sentiment Analysis**  
+   Characterize the general sentiment (e.g., “polite but urgent,” “some frustration over missed deadlines,” “collaborative and constructive,” etc.).
+
+Do NOT just list bullet‐points. Instead, weave everything into coherent paragraphs (roughly 6–8 sentences per section). Use bold section headers as shown below:
+
+---
+{combined_block}
+
+**DETAILED SUMMARY**  
+"""
+        # 3. Call the Ollama LLM
+        response = llm(prompt)
+        return response.strip()
+
+    except Exception as e:
+        return f"❌ Error generating deep AI summary: {str(e)}"
+
 
 def summarize_single_email_simple(email: Dict) -> str:
     """
-    Fallback summary if AI is disabled or no API key is provided.
-    Produces a simple, human‐readable paragraph with:
+    Fallback summary if AI is disabled. Produces a simple, human‐readable paragraph with:
       - Sender, Subject, and Date
       - A 40‐word preview of the cleaned email body
 
@@ -117,32 +188,29 @@ def summarize_single_email_simple(email: Dict) -> str:
 def summarize_single_email(
     email: Dict,
     use_ai: bool,
-    method: str,
-    api_key: str = None
+    method: str
 ) -> str:
     """
-    Wrapper that chooses between the OpenAI‐powered summary and the simple fallback.
+    Wrapper that chooses between the Ollama‐powered summary and the simple fallback.
 
     Parameters:
         email (Dict): A dictionary representing a single email.
         use_ai (bool): Whether to attempt AI summarization.
-        method (str): Should be "OpenAI GPT" to use the OpenAI path; otherwise, falls back.
-        api_key (str, optional): Your OpenAI API key (required if method == "OpenAI GPT").
+        method (str): Should be "Ollama Mistral" to use the AI path; otherwise, falls back.
 
     Returns:
         str: A one‐paragraph, human‐readable summary of the email.
     """
-    if use_ai and method == "OpenAI GPT" and api_key:
-        return summarize_single_email_openai(email, api_key)
+    if use_ai and method == "Ollama Mistral":
+        return summarize_single_email_ollama(email)
     else:
         return summarize_single_email_simple(email)
 
+
 # ————— Revised Summarization Functions —————
-
-
-def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
+def summarize_emails_paragraph_ollama(emails: List[Dict]) -> str:
     """
-    Given a list of email‑dicts, call OpenAI to produce a multi‑sentence paragraph
+    Given a list of email-dicts, call Ollama’s Mistral model to produce a multi-sentence paragraph
     that explains:
       1. Why these emails were sent (purpose/intent connecting them).
       2. The main topics/themes discussed.
@@ -152,9 +220,6 @@ def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
     Returns a single cohesive paragraph (3–5 sentences).
     """
     try:
-        if api_key:
-            openai.api_key = api_key
-
         # Build a combined block of all emails
         blocks = []
         for i, email in enumerate(emails, start=1):
@@ -174,7 +239,7 @@ def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
 
         prompt = f"""
 Below are {len(emails)} related emails from a single thread (or selection). 
-Please write a detailed, multi‑sentence paragraph (approximately 4–6 sentences) that covers:
+Please write a detailed, multi-sentence paragraph (approximately 4–6 sentences) that covers:
   1. Why these emails were exchanged—i.e., the overarching purpose or problem they address.
   2. The main topics or themes that emerge across them.
   3. Any concrete action items, decisions, or requests mentioned.
@@ -186,13 +251,8 @@ Do NOT list each email separately. Instead, weave everything into one cohesive p
 
 Summary:
 """
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.4
-        )
-        return response.choices[0].message.content.strip()
+        response = llm(prompt)
+        return response.strip()
 
     except Exception as e:
         return f"❌ Error generating AI summary: {str(e)}"
@@ -200,12 +260,12 @@ Summary:
 
 def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     """
-    Fallback summary (multi‑sentence paragraph):
-      • Attempts to infer why these emails exist (e.g. coordinating a meeting,
+    Fallback summary (multi-sentence paragraph):
+      • Attempts to infer why these emails exist (e.g., coordinating a meeting,
         updating on a project, requesting approvals, etc.)
       • Identifies 2–3 key themes or topics found in the bodies.
       • Notes any clear action items or next steps.
-      • Characterizes the tone (e.g. polite, urgent, informational).
+      • Characterizes the tone.
 
     Returns one paragraph of roughly 4–5 sentences.
     """
@@ -235,8 +295,8 @@ def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     themes = []
     if "deadline" in all_text:
         themes.append("upcoming deadlines")
-    if "follow up" in all_text or "follow‑up" in all_text:
-        themes.append("follow‑up tasks")
+    if "follow up" in all_text or "follow-up" in all_text:
+        themes.append("follow-up tasks")
     if "feedback" in all_text:
         themes.append("requesting feedback")
     if "update" in all_text:
@@ -266,7 +326,7 @@ def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     elif any(w in all_text for w in ["issue", "concern", "problem"]):
         tone = "There is a sense of concern or troubleshooting in the tone."
 
-    # 6) Build a multi‑sentence paragraph
+    # 6) Build a multi-sentence paragraph
     sentences = []
     sentences.append(purpose)
 
@@ -283,7 +343,7 @@ def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
         action_sentence = (
             "The emails outline "
             + ", ".join(actions[:2])
-            + (" and other follow‑up tasks." if len(actions) > 2 else ".")
+            + (" and other follow-up tasks." if len(actions) > 2 else ".")
         )
         sentences.append(action_sentence)
     else:
@@ -296,35 +356,76 @@ def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
     return paragraph
 
 
+def summarize_emails_insightful_ollama(emails: List[Dict]) -> str:
+    """
+    Given a list of email‐dicts, call Ollama’s Mistral model to produce a single, cohesive paragraph
+    of roughly 10 sentences (~200 words) that deeply analyzes:
+      • Why these emails were exchanged (purpose/intent).
+      • The key keywords and their significance.
+      • Communication patterns.
+      • Major insights or findings one can draw.
+      • Tone and sentiment.
+
+    Returns a detailed paragraph. On error, returns a string starting with "❌".
+    """
+    try:
+        # 1. Build a combined block of all emails
+        blocks = []
+        for i, email in enumerate(emails, start=1):
+            sender = email.get("From", "Unknown Sender")
+            subject = email.get("Subject", "No Subject")
+            dt = email.get("DateTime", "Unknown Date")
+            if hasattr(dt, "strftime"):
+                dt = dt.strftime("%Y-%m-%d %H:%M")
+            raw_body = email.get("Body", "") or email.get("Content", "")
+            # Minimal cleaning to remove forwarded/reply metadata
+            body = re.sub(r'\s+', ' ', raw_body.strip())
+            body = re.sub(r'On .* wrote:', '', body)
+            body = re.sub(r'From:.*?Subject:', '', body, flags=re.DOTALL)
+            body = re.sub(r'-----Original Message-----.*', '', body, flags=re.DOTALL)
+
+            blocks.append(
+                f"---\nEmail {i}:\nFrom: {sender}\nSubject: {subject}\nDate: {dt}\n\n{body}\n"
+            )
+
+        combined_block = "\n".join(blocks)
+
+        # 2. Build a forcing prompt that asks for ~10 sentences
+        prompt = f"""
+Below are {len(emails)} related emails (thread or selection). 
+Your task is to write a single cohesive paragraph of approximately ten sentences (~200 words) that covers:
+  1. **Purpose/Trigger**: Why did these emails exist? What problem or question initiated this thread?
+  2. **Key Keywords & Significance**: Identify 3–5 recurring keywords or phrases (e.g., “deadline,” “approval,” “budget”) and briefly explain why each is important in context.
+  3. **Communication Pattern**: Describe how participants are interacting—who replies to whom, any notable CC chains, or decision‐making flow.
+  4. **Insights/Findings**: What conclusions or important insights emerge from this set of messages?
+  5. **Tone & Sentiment**: Characterize the overall sentiment (e.g., collaborative, urgent, frustrated, polite) and reference any phrases that shape that tone.
+
+Make sure this is a single, fluid paragraph—do NOT list bullet points or separate sections. Aim for roughly ten sentences so the explanation feels thorough.
+
+Here are the emails:
+{combined_block}
+
+**DETAILED ANALYSIS PARAGRAPH:**
+"""
+        # 3. Call the Ollama LLM
+        response = llm(prompt)
+        return response.strip()
+
+    except Exception as e:
+        return f"❌ Error generating deep AI summary: {str(e)}"
+
 
 def summarize_all_selected(
     emails: List[Dict],
     use_ai: bool,
-    method: str,
-    api_key: str = None
+    method: str
 ) -> str:
     """
     Wrapper that chooses AI vs. simple for the entire list of selected emails.
     Returns one multi‐sentence paragraph.
     """
-    if use_ai and method == "OpenAI GPT" and api_key:
-        return summarize_emails_paragraph_openai(emails, api_key)
-    else:
-        return summarize_emails_paragraph_simple(emails)
-
-
-def summarize_all_selected(
-    emails: List[Dict],
-    use_ai: bool,
-    method: str,
-    api_key: str = None
-) -> str:
-    """
-    Wrapper that chooses AI vs. simple for the entire list of selected emails.
-    Returns a single paragraph string.
-    """
-    if use_ai and method == "OpenAI GPT" and api_key:
-        return summarize_emails_paragraph_openai(emails, api_key)
+    if use_ai and method == "Ollama Mistral":
+        return summarize_emails_insightful_ollama(emails)
     else:
         return summarize_emails_paragraph_simple(emails)
 
@@ -356,7 +457,6 @@ if df.empty:
     st.error(f"Could not parse any dates from field `{date_col}`.")
     st.stop()
 
-
 # ————— Sidebar Configuration —————
 st.sidebar.header("🔍 Filters")
 
@@ -365,17 +465,9 @@ st.sidebar.header("🤖 AI Summary Settings")
 use_ai_summary = st.sidebar.checkbox("Enable AI Summary", value=True)
 summary_method = st.sidebar.selectbox(
     "Summary Method",
-    ["Simple Analysis", "OpenAI GPT", "Custom AI Service"],
+    ["Simple Analysis", "Ollama Mistral"],
     help="Choose how to generate the summary of all selected emails"
 )
-
-openai_api_key = None
-if summary_method == "OpenAI GPT":
-    openai_api_key = st.sidebar.text_input(
-        "OpenAI API Key",
-        type="password",
-        help="Enter your OpenAI API key for AI‐powered summary"
-    )
 
 # Date & Sender Filters
 valid_dates = df["DateTime"]
@@ -393,7 +485,6 @@ senders = sorted(df.get("From", pd.Series(["(unknown)"])).fillna("(unknown)").un
 selected_senders = st.sidebar.multiselect("Sender", senders, default=senders)
 subject_kw = st.sidebar.text_input("Subject contains")
 
-
 # Apply filters
 mask = (
     df["DateTime"].dt.date.between(start_date, end_date) &
@@ -403,7 +494,6 @@ if subject_kw:
     mask &= df.get("Subject", "").str.contains(subject_kw, case=False, na=False)
 
 filtered = df[mask]
-
 
 # ————— 1) Interactive Timeline —————
 st.subheader("📈 Select Emails on the Timeline")
@@ -427,7 +517,6 @@ fig.update_layout(
 
 selected = plotly_events(fig, select_event=True, override_height=350)
 
-
 # ————— 2) Build Working Set (≥ MIN_SELECTED) —————
 if selected:
     idxs = [pt["pointIndex"] for pt in selected]
@@ -441,7 +530,6 @@ else:
     st.info(f"No selection—showing first {MIN_SELECTED} chronologically.")
     working = filtered.head(MIN_SELECTED)
 
-
 # ————— 3) Summary of All Selected Emails —————
 st.subheader("📝 Combined Summary of Selected Emails")
 if working.empty:
@@ -451,8 +539,7 @@ else:
     summary_text = summarize_all_selected(
         emails=email_records,
         use_ai=use_ai_summary,
-        method=summary_method,
-        api_key=openai_api_key
+        method=summary_method
     )
     st.markdown(summary_text)
 
@@ -492,7 +579,6 @@ with col2:
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
-
 # ————— 5) Heatmap: Hour vs Day of Week —————
 st.subheader("🔥 Email Traffic Heatmap")
 if not filtered.empty:
@@ -513,7 +599,6 @@ if not filtered.empty:
     )
     fig_heat.update_layout(xaxis_title="Hour of Day", yaxis_title="Day of Week")
     st.plotly_chart(fig_heat, use_container_width=True)
-
 
 # ————— 6) Detailed Email View (with Expander + “Show Body” toggle) —————
 st.subheader(f"✉️ Email Details ({len(working)} selected)")
@@ -562,8 +647,7 @@ else:
             summary_text = summarize_single_email(
                 email=email_dict,
                 use_ai=use_ai_summary,
-                method=summary_method,
-                api_key=openai_api_key
+                method=summary_method
             )
             st.markdown("**📝 Detailed Summary:**")
             st.markdown(summary_text)
@@ -576,4 +660,3 @@ else:
 
                 st.write(f"**Content** ({word_count} words):")
                 st.markdown(raw_body)
-
