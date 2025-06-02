@@ -1,387 +1,267 @@
-import streamlit as st
+# app.py
+
+import os
+import re
+import json
+import requests
+import logging
 import pandas as pd
 import plotly.express as px
-from streamlit_plotly_events import plotly_events
-import json
-from datetime import date
-import openai
+import streamlit as st
+from math import ceil
+from datetime import datetime
 from typing import List, Dict
-import re
-from src.config.config import CLEANED_JSON_PATH
+from streamlit_plotly_events import plotly_events
+from src.config.config import CLEANED_JSON_PATH, HUGGING_FACE_API_KEY
 
-# ————— Page Config —————
-st.set_page_config(layout="wide", page_title="Email Timeline & AI Summary")
+# ─────────── LOGGER CONFIGURATION ───────────
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# ————— Constants —————
-JSON_PATH = CLEANED_JSON_PATH
-PAGE_SIZE = 50
-MIN_SELECTED = 1
+# ─────────── Hugging Face Inference API Token ───────────
+# Make sure you set your HF token in the environment:
+#   export HUGGINGFACE_API_TOKEN="hf_XXXXXXXXXXXX"
+HF_TOKEN = HUGGING_FACE_API_KEY
 
+# ─────────── 1) PAGE CONFIG ───────────
+st.set_page_config(layout="wide", page_title="Email Timeline & Abstractive Summary")
 
-# ————— Cleaning & Summarization Helpers —————
+# ─────────── 2) UTILITY: CLEAN EMAIL CONTENT ───────────
 def clean_email_content(content: str) -> str:
     """
-    Clean email content for better AI processing.
-    - Collapse multiple whitespace characters into single spaces.
-    - Strip out common quoted‐reply artifacts (e.g., 'On ... wrote:' lines).
+    - Collapse multiple whitespace into a single space.
+    - Strip quoted‐reply artifacts (“On ... wrote:”).
+    - Remove forwarded blocks (“-----Original Message-----”).
+    - Remove HTML tags, URLs, and email addresses.
     """
     if not content:
         return ""
-    # Collapse excessive whitespace
-    content = re.sub(r'\s+', ' ', content.strip())
-    # Remove quoted‐reply headers and forwarded blocks
-    content = re.sub(r'On .* wrote:', '', content)
-    content = re.sub(r'From:.*?Subject:', '', content, flags=re.DOTALL)
-    content = re.sub(r'-----Original Message-----.*', '', content, flags=re.DOTALL)
-    return content
+    text = re.sub(r"\s+", " ", content.strip())
+    text = re.sub(r"On .* wrote:", "", text)
+    text = re.sub(r"-----Original Message-----.*", "", text, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)              # strip HTML tags
+    text = re.sub(r"https?://\S+", "", text)          # strip URLs
+    text = re.sub(r"\S+@\S+\.\S+", "", text)          # strip email addresses
+    return re.sub(r"\s+", " ", text).strip()
 
-def summarize_single_email_openai(email: Dict, api_key: str) -> str:
+# ─────────── 3) LOAD & NORMALIZE JSON ―───────────
+@st.cache_data
+def load_and_prepare(path: str) -> List[Dict]:
     """
-    Generate a concise, one‐paragraph summary of a single email using OpenAI GPT.
-
-    Parameters:
-        email (Dict): A dictionary with keys like "From", "Subject", "DateTime", and "Body"/"Content".
-        api_key (str): Your OpenAI API key.
-
-    Returns:
-        str: A one‐paragraph summary capturing key points, requested actions, and overall tone.
+    1) Load raw JSON (list of email dicts).
+    2) Clean each body and parse the "Date" field into a Python datetime (field renamed to "DateTime").
+    3) Skip any emails where "Date" cannot be parsed.
+    4) Return a list of dicts with keys: From, Subject, DateTime, Body.
     """
-    try:
-        if api_key:
-            openai.api_key = api_key
+    logger.info("Loading and preparing JSON from %s", path)
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
 
-        sender = email.get("From", "Unknown Sender")
-        subject = email.get("Subject", "No Subject")
-        dt = email.get("DateTime", "Unknown Date")
-        # If DateTime is a pandas.Timestamp, convert to string
-        if hasattr(dt, "strftime"):
-            dt = dt.strftime("%Y-%m-%d %H:%M")
-
-        raw_body = email.get("Body", "") or email.get("Content", "")
+    normalized: List[Dict] = []
+    for e in raw:
+        raw_body = e.get("Body", "") or e.get("Content", "")
         body = clean_email_content(raw_body)
 
-        prompt = f"""
-Below is an email. Please write a concise, one‐paragraph summary that captures:
-  • The key points discussed and any requested actions or next steps.
-  • The overall tone or sentiment of the message.
+        dt_value = e.get("Date")
+        dt_obj = None
+        if isinstance(dt_value, str):
+            # Try multiple date formats
+            for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                try:
+                    dt_obj = datetime.strptime(dt_value, fmt)
+                    break
+                except ValueError:
+                    continue
 
----
-From: {sender}
-Subject: {subject}
-Date: {dt}
+        if dt_obj is None:
+            logger.warning("Skipping email with unparseable Date: %s", dt_value)
+            continue
 
-{body}
+        normalized.append({
+            "From": e.get("From", "Unknown Sender"),
+            "Subject": e.get("Subject", ""),
+            "DateTime": dt_obj,
+            "Body": body
+        })
 
-Summary:
-"""
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=250,
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
+    normalized.sort(key=lambda x: x["DateTime"])
+    logger.info("Finished preparing %d emails with valid dates", len(normalized))
+    return normalized
 
-    except Exception as e:
-        return f"❌ Error generating AI summary: {str(e)}"
-
-
-def summarize_single_email_simple(email: Dict) -> str:
+# ─────────── 4) CHUNKING UTILITIES ───────────
+def chunk_emails(emails: List[Dict], chunk_size: int = 50) -> List[List[Dict]]:
     """
-    Fallback summary if AI is disabled or no API key is provided.
-    Produces a simple, human‐readable paragraph with:
-      - Sender, Subject, and Date
-      - A 40‐word preview of the cleaned email body
-
-    Returns:
-        str: A short paragraph previewing the email.
+    Split a list of email‐dicts into sublists each of length `chunk_size`.
     """
-    sender = email.get("From", "Unknown Sender")
-    subject = email.get("Subject", "No Subject")
-    dt = email.get("DateTime", "Unknown Date")
-    if hasattr(dt, "strftime"):
-        dt = dt.strftime("%Y-%m-%d %H:%M")
+    n = len(emails)
+    num_chunks = ceil(n / chunk_size)
+    return [emails[i * chunk_size : (i + 1) * chunk_size] for i in range(num_chunks)]
 
-    raw_body = email.get("Body", "") or email.get("Content", "")
-    body = clean_email_content(raw_body)
-    tokens = body.split()
-    snippet = " ".join(tokens[:40]) + ("..." if len(tokens) > 40 else "")
-
-    paragraph = (
-        f"This email was sent by {sender} on {dt} (Subject: “{subject}”). "
-        f"Content preview: “{snippet}”"
-    )
-    return paragraph
-
-
-def summarize_single_email(
-    email: Dict,
-    use_ai: bool,
-    method: str,
-    api_key: str = None
-) -> str:
+def chunk_texts(texts: List[str], chunk_size: int = 10) -> List[List[str]]:
     """
-    Wrapper that chooses between the OpenAI‐powered summary and the simple fallback.
-
-    Parameters:
-        email (Dict): A dictionary representing a single email.
-        use_ai (bool): Whether to attempt AI summarization.
-        method (str): Should be "OpenAI GPT" to use the OpenAI path; otherwise, falls back.
-        api_key (str, optional): Your OpenAI API key (required if method == "OpenAI GPT").
-
-    Returns:
-        str: A one‐paragraph, human‐readable summary of the email.
+    Split a list of strings (each ~100 words) into sublists each of length `chunk_size`.
     """
-    if use_ai and method == "OpenAI GPT" and api_key:
-        return summarize_single_email_openai(email, api_key)
-    else:
-        return summarize_single_email_simple(email)
+    n = len(texts)
+    num_chunks = ceil(n / chunk_size)
+    return [texts[i * chunk_size : (i + 1) * chunk_size] for i in range(num_chunks)]
 
-# ————— Revised Summarization Functions —————
-
-
-def summarize_emails_paragraph_openai(emails: List[Dict], api_key: str) -> str:
+# ─────────── 5) HUGGING FACE INFERENCE API HELPERS ───────────
+def hf_summarize(text: str, model: str = "facebook/bart-large-cnn") -> str:
     """
-    Given a list of email-dicts, call OpenAI to produce a multi-sentence paragraph
-    that explains:
-      1. Why these emails were sent (purpose/intent connecting them).
-      2. The main topics/themes discussed.
-      3. Any key action items or decisions.
-      4. The tone or sentiment among participants.
-
-    Returns a single cohesive paragraph (3–5 sentences).
+    Send `text` to Hugging Face Inference API for summarization.
+    Returns the "summary_text" from the response, or raises an error with details.
     """
+    logger.info("Calling Hugging Face summarize endpoint (model=%s) with text length %d", model, len(text))
+    api_url = f"https://api-inference.huggingface.co/models/{model}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "max_length": 150,
+            "min_length": 80,
+            "do_sample": False
+        }
+    }
+    response = requests.post(api_url, headers=headers, json=payload)
+    if response.status_code != 200:
+        # Log error and raise with details
+        err_text = response.text
+        logger.error("Hugging Face summarize failed (status %d): %s", response.status_code, err_text)
+        raise RuntimeError(f"Hugging Face summarize error {response.status_code}: {err_text}")
+    data = response.json()
+    summary = data[0]["summary_text"].strip()
+    logger.info("Received summary of length %d", len(summary))
+    return summary
+
+def hf_instructional_summarize(prompt: str, model: str = "facebook/bart-large-cnn") -> str:
+    """
+    Similar to hf_summarize, but used when sending an instructional prompt.
+    Returns the "summary_text" or raises an error with details.
+    """
+    logger.info("Calling Hugging Face instructional summarize endpoint (model=%s) with prompt length %d", model, len(prompt))
+    api_url = f"https://api-inference.huggingface.co/models/{model}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_length": 200,
+            "min_length": 120,
+            "do_sample": False
+        }
+    }
+    response = requests.post(api_url, headers=headers, json=payload)
+    if response.status_code != 200:
+        err_text = response.text
+        logger.error("Hugging Face instructional summarize failed (status %d): %s", response.status_code, err_text)
+        raise RuntimeError(f"Hugging Face instructional summarize error {response.status_code}: {err_text}")
+    data = response.json()
+    summary = data[0]["summary_text"].strip()
+    logger.info("Received final instructional summary of length %d", len(summary))
+    return summary
+
+# ─────────── 6) BATCH‐LEVEL SUMMARIZATION ───────────
+def summarize_one_batch(batch: List[Dict]) -> str:
+    """
+    Build a combined text for this batch:
+      [Email 1: From … | Subject … | Date …]
+      <body text>
+    Then call hf_summarize(...) to get a ~4–5 sentence summary.
+    If an error occurs, return a message containing the error details.
+    """
+    parts = []
+    for i, email in enumerate(batch, start=1):
+        sender = email["From"]
+        subject = email["Subject"]
+        dt_str = email["DateTime"].strftime("%Y-%m-%d %H:%M")
+        header = f"[Email {i}: From {sender} | Subject: {subject} | Date: {dt_str}]\n"
+        parts.append(header + email["Body"])
+
+    combined = "\n\n".join(parts)
     try:
-        if api_key:
-            openai.api_key = api_key
-
-        blocks = []
-        for i, email in enumerate(emails, start=1):
-            sender = email.get("From", "Unknown Sender")
-            subject = email.get("Subject", "No Subject")
-            dt = email.get("DateTime", "Unknown Date")
-            if hasattr(dt, "strftime"):
-                dt = dt.strftime("%Y-%m-%d %H:%M")
-            raw_body = email.get("Body", "") or email.get("Content", "")
-            body = clean_email_content(raw_body)
-
-            blocks.append(
-                f"---\nEmail {i}:\nFrom: {sender}\nSubject: {subject}\nDate: {dt}\n\n{body}\n"
-            )
-
-        combined_block = "\n".join(blocks)
-
-        prompt = f"""
-Below are {len(emails)} related emails from a single thread (or selection). 
-Please write a detailed, multi-sentence paragraph (approximately 4–6 sentences) that covers:
-  1. Why these emails were exchanged—i.e., the overarching purpose or problem they address.
-  2. The main topics or themes that emerge across them.
-  3. Any concrete action items, decisions, or requests mentioned.
-  4. The overall tone or sentiment among participants (e.g., collaborative, urgent, polite).
-
-Do NOT list each email separately. Instead, weave everything into one cohesive paragraph.
-
-{combined_block}
-
-Summary:
-"""
-        # ← Updated line here:
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.4
-        )
-        return response.choices[0].message.content.strip()
-
+        summary = hf_summarize(combined)
+        return summary
     except Exception as e:
-        return f"❌ Error generating AI summary: {str(e)}"
+        # Return the exception message so the UI can show it
+        return f"⚠️ Error summarizing this batch: {str(e)}"
 
-
-def summarize_emails_paragraph_simple(emails: List[Dict]) -> str:
+# ─────────── 7) FINAL SUMMARY WORKFLOW ───────────
+def generate_one_paragraph_summary(emails: List[Dict]) -> str:
     """
-    Fallback summary (multi‑sentence paragraph):
-      • Attempts to infer why these emails exist (e.g. coordinating a meeting,
-        updating on a project, requesting approvals, etc.)
-      • Identifies 2–3 key themes or topics found in the bodies.
-      • Notes any clear action items or next steps.
-      • Characterizes the tone (e.g. polite, urgent, informational).
-
-    Returns one paragraph of roughly 4–5 sentences.
+    Multi‐stage abstractive summarization pipeline:
+      1) Chunk emails into batches of 50, produce batch_summaries.
+      2) Chunk batch_summaries into groups of 10, produce intermediate_summaries.
+      3) Combine intermediate_summaries into mega_document.
+      4) Send an instructional prompt to HF to cover:
+         (1) key events, (2) tone shift, (3) crucial messages,
+         (4) why it occurred, (5) conclusion.
+      Return a single cohesive paragraph, or an error message if something fails.
     """
-    if not emails:
-        return "No emails to summarize."
+    logger.info("Starting final summarization pipeline on %d emails", len(emails))
 
-    # 1) Merge all bodies into one lowercase string for keyword scanning
-    all_text = " ".join(
-        clean_email_content(e.get("Body", "") or e.get("Content", ""))
-        for e in emails
-    ).lower()
+    # 1) Batch-level summaries
+    batches = chunk_emails(emails, chunk_size=50)
+    batch_summaries: List[str] = []
+    for i, batch in enumerate(batches, start=1):
+        logger.info("Summarizing batch %d/%d (size=%d)", i, len(batches), len(batch))
+        summary = summarize_one_batch(batch)
+        batch_summaries.append(summary)
 
-    # 2) Infer “purpose/context”
-    purpose = "These emails appear to be general correspondence."
-    if any(k in all_text for k in ["meeting", "schedule", "calendar", "reschedule"]):
-        purpose = "These messages revolve around scheduling and coordinating one or more meetings."
-    elif any(k in all_text for k in ["project", "milestone", "phase", "deliverable"]):
-        purpose = "They focus on providing updates and coordination for an ongoing project."
-    elif any(k in all_text for k in ["report", "analysis", "results", "data"]):
-        purpose = "The thread is primarily about sharing reports and analysis results."
-    elif any(k in all_text for k in ["invoice", "billing", "payment"]):
-        purpose = "This sequence concerns billing or payment inquiries."
-    elif any(k in all_text for k in ["approval", "sign off", "authorize", "approved"]):
-        purpose = "The emails are largely about seeking or granting approvals."
+    # 2) Chunk batch_summaries into subchunks of 10
+    summary_subchunks = chunk_texts(batch_summaries, chunk_size=10)
 
-    # 3) Identify 2–3 key themes/topics
-    themes = []
-    if "deadline" in all_text:
-        themes.append("upcoming deadlines")
-    if "follow up" in all_text or "follow‑up" in all_text:
-        themes.append("follow‑up tasks")
-    if "feedback" in all_text:
-        themes.append("requesting feedback")
-    if "update" in all_text:
-        themes.append("status updates")
-    if "budget" in all_text:
-        themes.append("budget or financial planning")
+    # 3) Summarize each subchunk
+    intermediate_summaries: List[str] = []
+    for i, sub in enumerate(summary_subchunks, start=1):
+        combined_sub = "\n\n".join(sub)
+        logger.info("Summarizing intermediate subchunk %d/%d", i, len(summary_subchunks))
+        try:
+            interm = hf_summarize(combined_sub)
+        except Exception as e:
+            interm = f"⚠️ Error summarizing this subchunk: {str(e)}"
+        intermediate_summaries.append(interm)
 
-    # 4) Detect action items / next steps
-    actions = []
-    if "action item" in all_text or "to do" in all_text:
-        actions.append("defined action items")
-    if "please review" in all_text or "kindly review" in all_text:
-        actions.append("requests for review")
-    if "confirm" in all_text:
-        actions.append("requests to confirm details")
-    if "deadline" in all_text:
-        actions.append("noted deadlines")
-    if "meeting" in all_text and "agenda" in all_text:
-        actions.append("agenda planning for upcoming meetings")
+    # 4) Combine intermediate summaries into mega_document
+    mega_document = "\n\n".join(intermediate_summaries)
+    logger.info("Combined intermediate summaries into mega document of length %d", len(mega_document))
 
-    # 5) Characterize tone
-    tone = "The tone comes across as straightforward and neutral."
-    if any(w in all_text for w in ["thanks", "thank you", "appreciate"]):
-        tone = "Overall, the tone seems polite and appreciative."
-    elif any(w in all_text for w in ["urgent", "asap", "immediately"]):
-        tone = "The tone indicates urgency and a need for prompt action."
-    elif any(w in all_text for w in ["issue", "concern", "problem"]):
-        tone = "There is a sense of concern or troubleshooting in the tone."
+    # 5) Final instructional prompt
+    prompt = f"""
+Below are {len(intermediate_summaries)} intermediate summaries of email batches.
+Please write a single, cohesive paragraph (4–6 sentences) that covers precisely:
+  1. The key events that unfolded across the timeline.
+  2. How the tone shifted over time (e.g., from collaborative to urgent to reconciliatory).
+  3. The most crucial messages or decision points.
+  4. Why this email exchange occurred in the first place.
+  5. The final conclusion or status at the end.
 
-    # 6) Build a multi‑sentence paragraph
-    sentences = []
-    sentences.append(purpose)
+Intermediate Summaries:
+{mega_document}
 
-    if themes:
-        theme_sentence = (
-            "Key themes include “" + ", ".join(themes[:2]) + "”"
-            + (" and other related topics." if len(themes) > 2 else ".")
-        )
-        sentences.append(theme_sentence)
-    else:
-        sentences.append("No strong topic emerged beyond the primary purpose.")
+One‐Paragraph Summary:
+"""
+    logger.info("Sending final instructional prompt (length=%d) to model", len(prompt))
+    try:
+        final_para = hf_instructional_summarize(prompt)
+        logger.info("Received final paragraph summary")
+    except Exception as e:
+        # Return the exception message so the UI can display it
+        final_para = f"❌ Error producing final summary: {str(e)}"
+    return final_para
 
-    if actions:
-        action_sentence = (
-            "The emails outline "
-            + ", ".join(actions[:2])
-            + (" and other follow‑up tasks." if len(actions) > 2 else ".")
-        )
-        sentences.append(action_sentence)
-    else:
-        sentences.append("There are no explicit action items spelled out.")
+# ─────────── 8) STREAMLIT APP UI ───────────
+all_emails = load_and_prepare(CLEANED_JSON_PATH)
+df = pd.json_normalize(all_emails)
 
-    sentences.append(tone)
-
-    # Join into one paragraph
-    paragraph = " ".join(sentences).strip()
-    return paragraph
-
-
-
-def summarize_all_selected(
-    emails: List[Dict],
-    use_ai: bool,
-    method: str,
-    api_key: str = None
-) -> str:
-    """
-    Wrapper that chooses AI vs. simple for the entire list of selected emails.
-    Returns one multi‐sentence paragraph.
-    """
-    if use_ai and method == "OpenAI GPT" and api_key:
-        return summarize_emails_paragraph_openai(emails, api_key)
-    else:
-        return summarize_emails_paragraph_simple(emails)
-
-
-def summarize_all_selected(
-    emails: List[Dict],
-    use_ai: bool,
-    method: str,
-    api_key: str = None
-) -> str:
-    """
-    Wrapper that chooses AI vs. simple for the entire list of selected emails.
-    Returns a single paragraph string.
-    """
-    if use_ai and method == "OpenAI GPT" and api_key:
-        return summarize_emails_paragraph_openai(emails, api_key)
-    else:
-        return summarize_emails_paragraph_simple(emails)
-
-
-# ————— Load & Normalize JSON —————
-@st.cache_data
-def load_raw(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-raw = load_raw(JSON_PATH)
-if not isinstance(raw, list) or len(raw) == 0:
-    st.error("JSON is empty or not an array of emails.")
-    st.stop()
-
-df = pd.json_normalize(raw)
-
-# Find any date‐like column
-candidates = [col for col in df.columns if any(k in col.lower() for k in ("date", "time", "timestamp"))]
-if not candidates:
-    st.error("No date‐like field found in your JSON.")
-    st.stop()
-
-date_col = candidates[0]
-df["DateTime"] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
-df = df.dropna(subset=["DateTime"]).sort_values("DateTime").reset_index(drop=True)
-if df.empty:
-    st.error(f"Could not parse any dates from field `{date_col}`.")
-    st.stop()
-
-
-# ————— Sidebar Configuration —————
+# --- Sidebar Filters ---
 st.sidebar.header("🔍 Filters")
 
-# AI Configuration
-st.sidebar.header("🤖 AI Summary Settings")
-use_ai_summary = st.sidebar.checkbox("Enable AI Summary", value=True)
-summary_method = st.sidebar.selectbox(
-    "Summary Method",
-    ["Simple Analysis", "OpenAI GPT", "Custom AI Service"],
-    help="Choose how to generate the summary of all selected emails"
-)
-
-openai_api_key = None
-if summary_method == "OpenAI GPT":
-    openai_api_key = st.sidebar.text_input(
-        "OpenAI API Key",
-        type="password",
-        help="Enter your OpenAI API key for AI‐powered summary"
-    )
-
-# Date & Sender Filters
+# Date range picker
 valid_dates = df["DateTime"]
 min_date = valid_dates.min().date()
 max_date = valid_dates.max().date()
-
 start_date, end_date = st.sidebar.date_input(
     "Date range",
     value=(min_date, max_date),
@@ -389,81 +269,72 @@ start_date, end_date = st.sidebar.date_input(
     max_value=max_date,
 )
 
-senders = sorted(df.get("From", pd.Series(["(unknown)"])).fillna("(unknown)").unique())
+# Sender multiselect
+senders = sorted(df["From"].unique())
 selected_senders = st.sidebar.multiselect("Sender", senders, default=senders)
+
+# Subject keyword filter
 subject_kw = st.sidebar.text_input("Subject contains")
 
-
-# Apply filters
+# Apply filters to DataFrame
 mask = (
     df["DateTime"].dt.date.between(start_date, end_date) &
-    df.get("From", "").isin(selected_senders)
+    df["From"].isin(selected_senders)
 )
 if subject_kw:
-    mask &= df.get("Subject", "").str.contains(subject_kw, case=False, na=False)
+    mask &= df["Subject"].str.contains(subject_kw, case=False, na=False)
 
-filtered = df[mask]
+filtered_df = df[mask]
 
-
-# ————— 1) Interactive Timeline —————
+# --- 1) Interactive Timeline ---
 st.subheader("📈 Select Emails on the Timeline")
-st.write("💡 **Tip**: Use the lasso or box select tool to choose emails for a combined summary.")
-
 fig = px.scatter(
-    filtered,
+    filtered_df,
     x="DateTime",
     y="From",
     hover_data=["Subject"],
     render_mode="webgl",
     title="Drag a box or lasso to select emails for summary",
-    height=350,
+    height=350
 )
 fig.update_traces(marker={"size": 8, "opacity": 0.7})
 fig.update_layout(
     xaxis_title="Date & Time",
     yaxis_title="Sender",
-    yaxis={"categoryorder": "array", "categoryarray": senders},
+    yaxis={"categoryorder": "array", "categoryarray": senders}
 )
+selected_points = plotly_events(fig, select_event=True, override_height=350)
 
-selected = plotly_events(fig, select_event=True, override_height=350)
-
-
-# ————— 2) Build Working Set (≥ MIN_SELECTED) —————
-if selected:
-    idxs = [pt["pointIndex"] for pt in selected]
-    if len(idxs) < MIN_SELECTED:
-        remaining = [i for i in filtered.index if i not in idxs]
-        idxs += remaining[: MIN_SELECTED - len(idxs)]
-        st.warning(f"Only {len(selected)} selected—added oldest to reach {MIN_SELECTED}.")
-    working = filtered.loc[idxs]
+# --- 2) Build Working Set (at Least 1 Email) ---
+if selected_points:
+    idxs = [pt["pointIndex"] for pt in selected_points]
+    if len(idxs) < 1:
+        idxs = [filtered_df.index.min()]
+        st.warning("Added the earliest email so we have at least one.")
+    working_df = filtered_df.loc[idxs].sort_values("DateTime")
     st.success(f"✅ {len(idxs)} emails selected for summary")
 else:
-    st.info(f"No selection—showing first {MIN_SELECTED} chronologically.")
-    working = filtered.head(MIN_SELECTED)
+    st.info("No selection—using the earliest email.")
+    working_df = filtered_df.head(1)
 
+# --- 3) Combined Abstractive Summary ---
+st.subheader("✍️ One‐Paragraph Abstractive Summary")
+if st.button("Generate Crystal‐Clear Summary"):
+    email_records = working_df.to_dict("records")
+    with st.spinner("🛠️ Generating summary—this may take a minute..."):
+        final_summary = generate_one_paragraph_summary(email_records)
+    st.markdown("**📜 Final One‐Paragraph Summary:**")
+    # Now the `final_summary` either contains the paragraph or a detailed error
+    st.markdown(final_summary)
 
-# ————— 3) Summary of All Selected Emails —————
-st.subheader("📝 Combined Summary of Selected Emails")
-if working.empty:
-    st.warning("No emails selected for summarization.")
-else:
-    email_records = working.to_dict("records")
-    summary_text = summarize_all_selected(
-        emails=email_records,
-        use_ai=use_ai_summary,
-        method=summary_method,
-        api_key=openai_api_key
-    )
-    st.markdown(summary_text)
-
-# ————— 4) Charts and Visualizations —————
+# --- 4) Charts & Visualizations (Optional) ---
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("📊 Daily Email Volume")
-    if not filtered.empty:
+    if not filtered_df.empty:
         daily_counts = (
-            filtered
+            filtered_df
             .set_index("DateTime")
             .resample("D")
             .size()
@@ -482,8 +353,8 @@ with col1:
 
 with col2:
     st.subheader("👥 Sender Distribution")
-    if not working.empty:
-        sender_counts = working['From'].value_counts().head(10)
+    if not working_df.empty:
+        sender_counts = working_df["From"].value_counts().head(10)
         fig_pie = px.pie(
             values=sender_counts.values,
             names=sender_counts.index,
@@ -492,18 +363,24 @@ with col2:
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
-
-# ————— 5) Heatmap: Hour vs Day of Week —————
+# --- 5) Heatmap: Hour vs Day of Week ---
 st.subheader("🔥 Email Traffic Heatmap")
-if not filtered.empty:
-    heat = filtered.assign(
-        DayOfWeek=filtered["DateTime"].dt.day_name(),
-        Hour=filtered["DateTime"].dt.hour
-    ).groupby(["DayOfWeek", "Hour"]).size().rename("Count").reset_index()
+if not filtered_df.empty:
+    heat_data = (
+        filtered_df
+        .assign(
+            DayOfWeek=filtered_df["DateTime"].dt.day_name(),
+            Hour=filtered_df["DateTime"].dt.hour
+        )
+        .groupby(["DayOfWeek", "Hour"])
+        .size()
+        .rename("Count")
+        .reset_index()
+    )
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    heat["DayOfWeek"] = pd.Categorical(heat["DayOfWeek"], categories=days, ordered=True)
+    heat_data["DayOfWeek"] = pd.Categorical(heat_data["DayOfWeek"], categories=days, ordered=True)
     fig_heat = px.density_heatmap(
-        heat,
+        heat_data,
         x="Hour",
         y="DayOfWeek",
         z="Count",
@@ -514,17 +391,15 @@ if not filtered.empty:
     fig_heat.update_layout(xaxis_title="Hour of Day", yaxis_title="Day of Week")
     st.plotly_chart(fig_heat, use_container_width=True)
 
-
-# ————— 6) Detailed Email View (with Expander + “Show Body” toggle) —————
-st.subheader(f"✉️ Email Details ({len(working)} selected)")
-if working.empty:
+# --- 6) Detailed Email View (with Expanders) ---
+st.subheader(f"✉️ Email Details ({len(working_df)} selected)")
+if working_df.empty:
     st.warning("Nothing to display.")
 else:
-    pages = (len(working) - 1) // PAGE_SIZE + 1
+    pages = ceil(len(working_df) / 50)
     page = st.sidebar.number_input("Page", 1, pages, 1)
-    chunk = working.iloc[(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
+    chunk = working_df.iloc[(page - 1) * 50 : page * 50]
 
-    # Display a small table of metadata first
     display_cols = ["DateTime", "From", "Subject"]
     if "To" in chunk.columns:
         display_cols.append("To")
@@ -534,45 +409,32 @@ else:
         use_container_width=True
     )
 
-    # Iterate over each row and wrap in an expander
     for idx, row in chunk.iterrows():
         ts = row["DateTime"].strftime("%Y-%m-%d %H:%M")
         subject = row.get("Subject", "(no subject)")
 
-        # 1) Create an expander per email
         with st.expander(f"📧 {ts} — {subject}", expanded=False):
-            # 2) Show metadata (From, To, Cc, Message ID)
-            col1, col2 = st.columns([1, 1])
-            with col1:
+            col_a, col_b = st.columns([1, 1])
+            with col_a:
                 st.write(f"**From:** {row.get('From', 'Unknown')}")
                 if "To" in row and pd.notna(row["To"]):
                     st.write(f"**To:** {row['To']}")
                 if "Cc" in row and pd.notna(row["Cc"]):
                     st.write(f"**Cc:** {row['Cc']}")
-            with col2:
+            with col_b:
                 st.write(f"**Date:** {ts}")
-                if "MessageId" in row and pd.notna(row["MessageId"]):
-                    st.write(f"**Message ID:** {row['MessageId'][:50]}...")
+                if "Message-ID" in row and pd.notna(row["Message-ID"]):
+                    st.write(f"**Message ID:** {row['Message-ID'][:50]}...")
 
-            # 3) Always display the detailed summary paragraph
-            email_dict = row.to_dict()
-            if hasattr(email_dict["DateTime"], "strftime"):
-                email_dict["DateTime"] = email_dict["DateTime"].strftime("%Y-%m-%d %H:%M")
+            # Short preview of the body (first 40 words)
+            preview = " ".join(row["Body"].split()[:40]) + ("..." if len(row["Body"].split()) > 40 else "")
+            st.markdown("**📝 Content Preview:**")
+            st.markdown(preview)
 
-            summary_text = summarize_single_email(
-                email=email_dict,
-                use_ai=use_ai_summary,
-                method=summary_method,
-                api_key=openai_api_key
-            )
-            st.markdown("**📝 Detailed Summary:**")
-            st.markdown(summary_text)
-
-            # 4) “Show Body” button to reveal the full email content on demand
+            # “Show Body” toggle
             show_body_key = f"show_body_{idx}"
             if st.button("Show Body", key=show_body_key):
-                raw_body = row.get("Body") or row.get("Content") or "_No content available_"
-                word_count = len(raw_body.split()) if raw_body != "_No content available_" else 0
-
-                st.write(f"**Content** ({word_count} words):")
-                st.markdown(raw_body)
+                full_body = row["Body"] or "_No content available_"
+                wc = len(full_body.split()) if full_body != "_No content available_" else 0
+                st.write(f"**Content ({wc} words):**")
+                st.markdown(full_body)
