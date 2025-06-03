@@ -1,7 +1,9 @@
+import sys
 import pandas as pd
 import streamlit as st
 import json
 import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
