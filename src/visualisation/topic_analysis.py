@@ -1,34 +1,65 @@
+import os
 import json
 import re
-import os
-from collections import Counter
-import matplotlib.pyplot as plt
+import nltk
+import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
 import seaborn as sns
+from collections import Counter
+from nltk.corpus import stopwords
 
-# 📍 Step 1: Load data
+nltk.download('stopwords', quiet=True)
+
+stop_words = set(stopwords.words('english'))
+
+st.set_page_config(page_title="Enron Email Emotion Analysis", layout="wide")
+st.title("📬 Enron Email Word & Emotion Tagging")
+
 data_path = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'cleaned_enron.json')
-
-with open(data_path, "r", encoding="utf-8") as f:
+with open(data_path, 'r', encoding='utf-8') as f:
     emails = json.load(f)
 
-# 📍 Step 2: Extract and clean all email bodies
 bodies = [email.get("Body", "") for email in emails]
 text = " ".join(bodies).lower()
-text = re.sub(r'[^a-z\s]', '', text)
+text = re.sub(r"[^a-z\s]", " ", text)
+tokens = text.split()
+filtered_words = [w for w in tokens if w not in stop_words and len(w) > 3]
 
-# 📍 Step 3: Define target topics/entities
-topics = ["dynegy", "merger", "california", "crisis", "lawsuit", "energy", "enron", "deal", "ferc", "ab1890"]
+word_freq = Counter(filtered_words)
+df_words = pd.DataFrame(word_freq.items(), columns=["Word", "Frequency"]).sort_values(by="Frequency", ascending=False)
+df_words = df_words[df_words["Frequency"] > 5]
 
-# 📍 Step 4: Count topic mentions
-topic_counts = Counter({topic: text.count(topic) for topic in topics})
-df_topics = pd.DataFrame(topic_counts.items(), columns=["Topic", "Frequency"]).sort_values(by="Frequency", ascending=False)
+emotion_keywords = {
+    "joy": ["happy", "glad", "excited", "pleased", "celebrate", "smile"],
+    "anger": ["angry", "furious", "hate", "fight", "rage", "resent"],
+    "fear": ["scared", "fear", "afraid", "worry", "panic", "anxious"],
+    "trust": ["trust", "agree", "support", "reliable", "sure", "loyal"],
+    "sadness": ["sad", "unhappy", "cry", "regret", "grief", "depressed"],
+    "surprise": ["surprise", "shocked", "unexpected", "amazed", "wow"],
+    "disgust": ["disgust", "nasty", "gross", "horrible", "offensive"],
+    "anticipation": ["expect", "hope", "eager", "plan", "soon", "await"]
+}
 
-# 📍 Step 5: Plot as bar chart
-plt.figure(figsize=(10, 6))
-sns.barplot(data=df_topics, x="Frequency", y="Topic", palette="viridis")
-plt.title("Most Discussed Topics in Emails")
-plt.xlabel("Mentions")
-plt.ylabel("Topics")
-plt.tight_layout()
-plt.show()
+def get_emotion(word):
+    for emotion, keywords in emotion_keywords.items():
+        if word in keywords:
+            return emotion
+    return "neutral"
+
+df_words["Emotion"] = df_words["Word"].apply(get_emotion)
+
+st.subheader("🔠 Top Words with Detected Emotions")
+st.dataframe(df_words.head(50), use_container_width=True)
+
+emotion_summary = df_words["Emotion"].value_counts().reset_index()
+emotion_summary.columns = ["Emotion", "Count"]
+emotion_summary = emotion_summary[emotion_summary["Emotion"] != "neutral"]
+
+st.subheader("🧠 Emotion Distribution (Keyword-based)")
+fig, ax = plt.subplots(figsize=(10, 5))
+sns.barplot(data=emotion_summary, x="Emotion", y="Count", palette="Set2", ax=ax)
+ax.set_title("Emotion Frequencies in Enron Emails")
+ax.set_xlabel("Emotion")
+ax.set_ylabel("Word Count")
+st.pyplot(fig)
