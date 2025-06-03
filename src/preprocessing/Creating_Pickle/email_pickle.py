@@ -8,9 +8,28 @@ import logging
 from datetime import datetime
 from typing import List, Dict
 
+import torch
 import pandas as pd
-from transformers import pipeline
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    AutoModelForQuestionAnswering,
+    AutoModelForSeq2SeqLM,
+    pipeline
+)
 from tqdm import tqdm
+
+# ─────────── Added for extractive TextRank ───────────
+import nltk
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
+import networkx as nx
+from itertools import combinations
+
+# Ensure necessary NLTK data is downloaded
+nltk.download("punkt")
+nltk.download("stopwords")
+stop_words = set(stopwords.words("english"))
 
 from src.config.config import CLEANED_JSON_PATH, PICKLE_FILE
 
@@ -22,13 +41,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─────────── 0) CONFIGURE PATHS HERE ───────────
-# Edit these paths (or set them via environment variables) before running.
 RAW_JSON_PATH = CLEANED_JSON_PATH
 OUTPUT_PICKLE = PICKLE_FILE
 
 # ─────────── 0.5) HF CACHE LOCATION ───────────
-# Change this to a folder on D: (or set via env var if you prefer).
-HF_CACHE_DIR = os.environ.get("HF_CACHE_DIR", "D:/hf_cache")
+HF_CACHE_DIR = os.environ.get("HF_CACHE_DIR", "D:/Applications/.cache/hugging_face/hf_cache")
 
 
 # ─────────── 1) CLEANING HELPERS ───────────
@@ -70,14 +87,10 @@ def load_and_prepare_emails(path: str) -> List[Dict]:
     skipped = 0
 
     for idx, e in enumerate(raw):
-        # If a Message‐ID exists, use it; otherwise fallback to an index‐based ID
         email_id = e.get("Message-ID") or f"email_{idx}"
-
-        # Get the body (“Body” or “Content”)
         raw_body = e.get("Body", "") or e.get("Content", "")
         body = clean_email_content(raw_body)
 
-        # Parse date (try a few common formats)
         dt_obj = None
         dt_value = e.get("Date", "")
         for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
@@ -105,27 +118,82 @@ def load_and_prepare_emails(path: str) -> List[Dict]:
     return normalized
 
 
-# ─────────── 3) NLP PIPELINES ───────────
+# ─────────── 3) EXTRACTIVE TextRank HELPER ───────────
+def textrank_extract(text: str, top_n: int = 20) -> List[str]:
+    """
+    Use a simple TextRank to extract the top_n most important sentences from `text`.
+    Returns those sentences in their original order.
+    """
+    sentences = sent_tokenize(text)
+    if len(sentences) <= top_n:
+        return sentences
+
+    # Convert each sentence to a set of words (lowercase, no stopwords)
+    def sent_to_set(s: str) -> set:
+        return {
+            w.lower()
+            for w in word_tokenize(s)
+            if w.isalpha() and w.lower() not in stop_words
+        }
+
+    vectors = [sent_to_set(s) for s in sentences]
+    G = nx.Graph()
+    G.add_nodes_from(range(len(sentences)))
+
+    # Build edges weighted by Jaccard similarity
+    for i, j in combinations(range(len(sentences)), 2):
+        inter = vectors[i].intersection(vectors[j])
+        union = vectors[i].union(vectors[j])
+        if not union:
+            continue
+        sim = len(inter) / len(union)
+        if sim > 0:
+            G.add_edge(i, j, weight=sim)
+
+    scores = nx.pagerank(G, weight="weight")
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    top_indices = sorted(idx for idx, _ in ranked[:top_n])
+    return [sentences[i] for i in top_indices]
+
+
+# ─────────── 4) NLP PIPELINES ───────────
 def build_nlp_pipelines():
     """
-    1) sentiment‐analyzer (for “tone”)
-       → Using a RoBERTa‐based model for better quality.
-    2) question‐answerer (for “Why was this email was sent?”)
-       → Using distilbert‐base‐uncased‐distilled‐squad.
+    1) sentiment‐analyzer (for “tone”)          → GPU if available
+    2) question‐answerer (for “Why was this email sent?”) → GPU if available
+    3) summarizer (for full-body summary)       → GPU if available
     """
-    # Ensure cache directory exists and is writable
+    # Check GPU
+    cuda_ok = torch.cuda.is_available()
+    logger.info("torch.cuda.is_available(): %s", cuda_ok)
+    if cuda_ok:
+        logger.info("Using GPU: %s", torch.cuda.get_device_name(0))
+        device_id = 0
+    else:
+        logger.info("No GPU found; pipelines will run on CPU")
+        device_id = -1
+
+    # Ensure cache directory exists
     os.makedirs(HF_CACHE_DIR, exist_ok=True)
     logger.info("Loading NLP pipelines with cache_dir=%s", HF_CACHE_DIR)
 
     # 1) Sentiment‐Analysis
     sentiment_model = "siebert/sentiment-roberta-large-english"
     try:
-        logger.info("About to load sentiment model: %s", sentiment_model)
-        sentiment = pipeline(
-            "sentiment-analysis",
-            model=sentiment_model,
-            tokenizer=sentiment_model,
+        logger.info("About to load sentiment tokenizer and model: %s", sentiment_model)
+        tokenizer_sent = AutoTokenizer.from_pretrained(
+            sentiment_model,
             cache_dir=HF_CACHE_DIR
+        )
+        model_sent = AutoModelForSequenceClassification.from_pretrained(
+            sentiment_model,
+            cache_dir=HF_CACHE_DIR
+        )
+        sentiment_pipe = pipeline(
+            "sentiment-analysis",
+            model=model_sent,
+            tokenizer=tokenizer_sent,
+            device=device_id
         )
         logger.info("Successfully loaded sentiment model: %s", sentiment_model)
     except Exception as e:
@@ -135,20 +203,51 @@ def build_nlp_pipelines():
     # 2) Question‐Answering
     qa_model = "distilbert-base-uncased-distilled-squad"
     try:
-        logger.info("About to load QA model: %s", qa_model)
-        qa = pipeline(
-            "question-answering",
-            model=qa_model,
-            tokenizer=qa_model,
+        logger.info("About to load QA tokenizer and model: %s", qa_model)
+        tokenizer_qa = AutoTokenizer.from_pretrained(
+            qa_model,
             cache_dir=HF_CACHE_DIR
+        )
+        model_qa = AutoModelForQuestionAnswering.from_pretrained(
+            qa_model,
+            cache_dir=HF_CACHE_DIR
+        )
+        qa_pipe = pipeline(
+            "question-answering",
+            model=model_qa,
+            tokenizer=tokenizer_qa,
+            device=device_id
         )
         logger.info("Successfully loaded QA model: %s", qa_model)
     except Exception as e:
         logger.error("Failed to load QA model '%s': %s", qa_model, e)
         raise
 
+    # 3) Summarization
+    summarization_model = "sshleifer/distilbart-cnn-12-6"
+    try:
+        logger.info("About to load summarization tokenizer and model: %s", summarization_model)
+        tokenizer_sum = AutoTokenizer.from_pretrained(
+            summarization_model,
+            cache_dir=HF_CACHE_DIR
+        )
+        model_sum = AutoModelForSeq2SeqLM.from_pretrained(
+            summarization_model,
+            cache_dir=HF_CACHE_DIR
+        )
+        summarizer_pipe = pipeline(
+            "summarization",
+            model=model_sum,
+            tokenizer=tokenizer_sum,
+            device=device_id
+        )
+        logger.info("Successfully loaded summarization model: %s", summarization_model)
+    except Exception as e:
+        logger.error("Failed to load summarization model '%s': %s", summarization_model, e)
+        raise
+
     logger.info("NLP pipelines loaded successfully")
-    return sentiment, qa
+    return sentiment_pipe, qa_pipe, summarizer_pipe
 
 
 def extract_first_sentence(text: str) -> str:
@@ -178,17 +277,140 @@ def answer_why_sent(qa_pipeline, body: str) -> str:
         return ""
 
 
-# ─────────── 4) MAIN: BUILD & PICKLE DATAFRAME ───────────
+def summarize_body(summarizer, body: str) -> str:
+    """
+    Summarize the full body of an email in two stages with overlapping chunks:
+      1) (Optional) Extract top sentences via TextRank.
+      2) Split into ~5000-character chunks with 1000-character overlap.
+      3) Summarize each chunk independently.
+      4) Concatenate chunk summaries.
+      5) Final summarization pass on concatenated text.
+    """
+    if not body:
+        return ""
+
+    # A) Extractive pre-filter (TextRank) if body is long
+    if len(body.split()) > 200:  # only run TextRank on long bodies (>200 words)
+        key_sentences = textrank_extract(body, top_n=20)
+        body = " ".join(key_sentences)
+
+    # 1) Normalize whitespace
+    text = re.sub(r"\s+", " ", body.strip())
+
+    # 2) Define chunk parameters
+    chunk_size = 5000
+    overlap = 1000
+
+    # 3) Build overlapping chunks
+    chunks = []
+    start = 0
+    length = len(text)
+    while start < length:
+        end = start + chunk_size
+        if end >= length:
+            chunks.append(text[start:])
+            break
+
+        # Attempt to end chunk at a sentence boundary within the last overlap window
+        split_point = text.rfind(".", start + chunk_size - overlap, end)
+        if split_point == -1 or split_point < start + chunk_size - overlap:
+            split_point = end
+        else:
+            split_point += 1  # include the period
+
+        chunks.append(text[start:split_point].strip())
+        start = max(split_point - overlap, split_point)
+
+    # 4) Summarize each chunk
+    chunk_summaries = []
+    for i, chunk in enumerate(chunks):
+        tokenizer = summarizer.tokenizer
+        inputs = tokenizer(
+            chunk,
+            return_tensors="pt",
+            truncation=True,
+            max_length=1024
+        )
+        input_len = inputs.input_ids.shape[-1]
+
+        # 4a) If input is very short (≤ 20 tokens), skip summarization
+        if input_len <= 20:
+            chunk_summaries.append(chunk)
+            continue
+
+        # 4b) For 21–200 tokens: request half-length summary (min 3 tokens)
+        if input_len <= 200:
+            out_max_len = max(3, input_len // 2)
+            out_min_len = max(1, input_len // 4)
+        else:
+            # 4c) For > 200 tokens: fixed-length summary (≤ 50 tokens)
+            out_max_len = 50
+            out_min_len = 20
+
+        try:
+            summary_out = summarizer(
+                chunk,
+                max_length=out_max_len,
+                min_length=out_min_len,
+                do_sample=False,
+                truncation=True
+            )
+            chunk_summary = summary_out[0]["summary_text"].strip()
+        except Exception as e:
+            logger.warning("Chunk %d summarization failed: %s", i, e)
+            chunk_summary = chunk[:200].strip()  # fallback: first 200 chars
+        chunk_summaries.append(chunk_summary)
+
+    if not chunk_summaries:
+        return ""
+
+    # 5) Concatenate all chunk summaries
+    combined_summary = " ".join(chunk_summaries)
+
+    # 6) Final summarization pass on concatenated text
+    if len(combined_summary) > 8000:
+        logger.warning("Combined chunk summaries exceed 8000 characters; truncating for final summarization.")
+        combined_summary = combined_summary[:8000]
+
+    tokenizer = summarizer.tokenizer
+    inputs = tokenizer(combined_summary, return_tensors="pt", truncation=True, max_length=1024)
+    input_len = inputs.input_ids.shape[-1]
+
+    if input_len <= 20:
+        return combined_summary.strip()
+
+    if input_len <= 200:
+        out_max_len = max(3, input_len // 2)
+        out_min_len = max(1, input_len // 4)
+    else:
+        out_max_len = 50
+        out_min_len = 20
+
+    try:
+        final_out = summarizer(
+            combined_summary,
+            max_length=out_max_len,
+            min_length=out_min_len,
+            do_sample=False,
+            truncation=True
+        )
+        return final_out[0]["summary_text"].strip()
+    except Exception as e:
+        logger.warning("Final summarization pass failed: %s", e)
+        return combined_summary
+
+
+# ─────────── 5) MAIN: BUILD & PICKLE DATAFRAME ───────────
 def build_and_pickle(email_json_path: str, output_pickle_path: str):
     logger.info("Starting build_and_pickle process")
     # 1) Load + clean all emails
     emails = load_and_prepare_emails(email_json_path)
 
-    # 2) Build NLP pipelines (sentiment + QA)
-    sentiment_pipe, qa_pipe = build_nlp_pipelines()
+    # 2) Build NLP pipelines (sentiment + QA + summarizer)
+    sentiment_pipe, qa_pipe, summarizer_pipe = build_nlp_pipelines()
 
     logger.info("Beginning to process %d emails", len(emails))
-    # 3) For each email, compute Purpose / Tone / TimelinePoint
+    # 3) For each email, compute Purpose / Tone / TimelinePoint / BodySummary
     records = []
     for e in tqdm(emails, desc="Processing emails"):
         body = e["Body"]
@@ -206,6 +428,9 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str):
         # 3c) Timeline point → first sentence
         timeline_pt = extract_first_sentence(body)
 
+        # 3d) Body summary (extractive + overlapping chunk ↑)
+        body_summary = summarize_body(summarizer_pipe, body)
+
         records.append({
             "EmailID":       e["EmailID"],
             "From":          e["From"],
@@ -214,7 +439,8 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str):
             "Body":          body,
             "Purpose":       purpose,
             "Tone":          tone,
-            "TimelinePoint": timeline_pt
+            "TimelinePoint": timeline_pt,
+            "BodySummary":   body_summary
         })
 
     # 4) Build DataFrame & pickle
