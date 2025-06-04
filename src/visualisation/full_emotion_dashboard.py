@@ -6,8 +6,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import Counter
-from wordcloud import WordCloud
-import numpy as np
 
 # --- Page setup ---
 st.set_page_config(page_title="Full Emotion Tracker", layout="wide")
@@ -18,18 +16,14 @@ data_path = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'cleaned
 with open(data_path, 'r', encoding='utf-8') as f:
     emails = json.load(f)
 
-# --- Expanded stopwords ---
+# --- Stopwords ---
 stop_words = set([
-    "the", "and", "to", "of", "a", "in", "for", "on", "that", "is", "with",
-    "this", "by", "it", "be", "we", "are", "was", "as", "an", "at", "from", "not",
-    "have", "has", "or", "but", "can", "if", "i", "you", "he", "she", "they",
-    "will", "would", "could", "should", "our", "your", "their", "them", "his",
-    "her", "us", "my", "me", "do", "does", "did", "been", "being", "so", "no",
-    "yes", "just", "than", "then", "out", "enron", "said", "nbsp", "message",
-    "original", "attached", "thank", "regards", "mail", "subject", "comments",
-    "journal", "reuters", "press", "quote", "newsletter", "distribution",
-    "conference", "document", "draft", "senate", "tariff", "forwarded", "cc",
-    "bcc", "etc", "http", "https", "com", "org"
+    "the", "and", "to", "of", "a", "in", "for", "on", "that", "is", "with", "this", "by", "it", "be", "we", "are", "was",
+    "as", "an", "at", "from", "not", "have", "has", "or", "but", "can", "if", "i", "you", "he", "she", "they", "will",
+    "would", "could", "should", "our", "your", "their", "them", "his", "her", "us", "my", "me", "do", "does", "did",
+    "been", "being", "so", "no", "yes", "just", "than", "then", "out", "said", "nbsp", "message", "original",
+    "attached", "thank", "regards", "mail", "subject", "comments", "journal", "reuters", "press", "quote",
+    "newsletter", "distribution", "conference", "document", "draft", "cc", "bcc", "etc", "http", "https", "com", "org"
 ])
 
 # --- Emotion keywords ---
@@ -47,10 +41,14 @@ keyword_to_emotion = {word: emotion for emotion, words in emotion_keywords.items
 
 # --- Emotion tagging ---
 emotion_records = []
+email_emotion_counter = Counter()
+
 for email in emails:
     body = email.get("Body", "").lower()
     clean = re.sub(r"[^a-z\s]", " ", body)
     tokens = [w for w in clean.split() if len(w) > 3 and w not in stop_words]
+
+    # Save word-level emotion tagging for table
     for word in tokens:
         if word in keyword_to_emotion:
             emotion_records.append({
@@ -63,24 +61,31 @@ for email in emails:
                 "Snippet": body[:300].replace("\n", " ") + "..."
             })
 
+    # Count each emotion once per email
+    email_emotions = set()
+    for emotion, keywords in emotion_keywords.items():
+        if any(keyword in tokens for keyword in keywords):
+            email_emotions.add(emotion)
+    email_emotion_counter.update(email_emotions)
+
 df_emotion = pd.DataFrame(emotion_records)
-emotion_summary = df_emotion["Emotion"].value_counts().reset_index()
-emotion_summary.columns = ["Emotion", "Count"]
+df_bar = pd.DataFrame(email_emotion_counter.items(), columns=["Emotion", "Count"]).sort_values(by="Count", ascending=False)
 negative_emotions = ["anger", "fear", "sadness", "disgust"]
 df_negative = df_emotion[df_emotion["Emotion"].isin(negative_emotions)]
 
-# --- Emotion tables and charts ---
+# --- UI ---
 st.subheader("📋 Emotion-Tagged Words")
 st.dataframe(df_emotion.head(50), use_container_width=True)
 
 st.markdown("## 📊 Emotion Distribution")
 col1, col2 = st.columns([2, 3])
+
 with col1:
     fig, ax = plt.subplots(figsize=(6, 3))
-    sns.barplot(data=emotion_summary, x="Emotion", y="Count", palette="Pastel1", ax=ax)
-    ax.set_title("Emotions in Emails", fontsize=12)
+    sns.barplot(data=df_bar, x="Emotion", y="Count", palette="pastel", ax=ax)
+    ax.set_title("Emotion Distribution (One Count per Email)", fontsize=12)
     ax.set_xlabel("")
-    ax.set_ylabel("Count")
+    ax.set_ylabel("Email Count")
     ax.tick_params(axis='x', labelrotation=45)
     st.pyplot(fig)
 
@@ -96,38 +101,7 @@ st.markdown("---")
 st.subheader("🧨 Emails Containing Negative Emotions")
 st.dataframe(df_negative.head(30), use_container_width=True)
 
-# --- Word Cloud ---
-st.markdown("---")
-st.subheader("☁️ Word Cloud (Cleaned + Circular + Light Colors)")
-
-# Prepare text
-all_text = " ".join(email.get("Body", "").lower() for email in emails)
-all_text = re.sub(r"[^a-z\s]", " ", all_text)
-tokens = [word for word in all_text.split() if word not in stop_words and len(word) > 3]
-word_freq = Counter(tokens)
-
-# Create a circular mask
-x, y = np.ogrid[:300, :300]
-mask = (x - 150) ** 2 + (y - 150) ** 2 > 150**2
-circle_mask = 255 * mask.astype(int)
-
-# Create and show WordCloud
-wc = WordCloud(
-    width=800,
-    height=400,
-    background_color="white",
-    colormap="copper",  # light/nude
-    mask=circle_mask,
-    contour_color='gray',
-    contour_width=1
-).generate_from_frequencies(word_freq)
-
-fig, ax = plt.subplots(figsize=(6, 3))  # 🔽 Smaller figure size
-ax.imshow(wc, interpolation="bilinear")
-ax.axis("off")
-st.pyplot(fig)
-
-# --- Footer Hide ---
+# --- Hide footer ---
 st.markdown("""
 <style>
 footer {visibility: hidden;}
