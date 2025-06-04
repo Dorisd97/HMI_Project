@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 # ─────────── Configure NLTK to use local resource folder ───────────
 import nltk
-from src.config.config import NLTK_FILE  # base directory for NLTK data
+from src.config.config import NLTK_FILE, HF_CACHE_DIR  # base directory for NLTK data
 
 # Insert the folder where you placed punkt, stopwords, etc.
 nltk.data.path.insert(0, NLTK_FILE)
@@ -64,7 +64,7 @@ RAW_JSON_PATH = CLEANED_JSON_PATH
 OUTPUT_PICKLE = PICKLE_FILE
 
 # ─────────── 0.5) HF CACHE LOCATION ───────────
-HF_CACHE_DIR = os.environ.get("HF_CACHE_DIR", "D:/Applications/.cache/hugging_face/hf_cache")
+HF_CACHE_DIR = os.environ.get("HF_CACHE_DIR", HF_CACHE_DIR)
 
 
 # ─────────── 1) CLEANING HELPERS ───────────
