@@ -19,16 +19,35 @@ from transformers import (
 )
 from tqdm import tqdm
 
-# ─────────── Added for extractive TextRank ───────────
+# ─────────── Configure NLTK to use local resource folder ───────────
 import nltk
+from src.config.config import NLTK_FILE  # base directory for NLTK data
+
+# Insert the folder where you placed punkt, stopwords, etc.
+nltk.data.path.insert(0, NLTK_FILE)
+
+# Verify “punkt” is available under that path; if not, raise an error
+try:
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    raise RuntimeError(
+        f"NLTK could not find 'punkt' under the specified path: {NLTK_FILE}"
+    )
+
+# Verify “stopwords” is available under that path; if not, raise an error
+try:
+    nltk.data.find("corpora/stopwords")
+except LookupError:
+    raise RuntimeError(
+        f"NLTK could not find 'stopwords' under the specified path: {NLTK_FILE}"
+    )
+
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 import networkx as nx
 from itertools import combinations
 
-# Ensure necessary NLTK data is downloaded
-nltk.download("punkt")
-nltk.download("stopwords")
+# Load stopwords
 stop_words = set(stopwords.words("english"))
 
 from src.config.config import CLEANED_JSON_PATH, PICKLE_FILE
@@ -124,15 +143,22 @@ def textrank_extract(text: str, top_n: int = 20) -> List[str]:
     Use a simple TextRank to extract the top_n most important sentences from `text`.
     Returns those sentences in their original order.
     """
+    # A) Sentence tokenization (using punkt from local path)
     sentences = sent_tokenize(text)
     if len(sentences) <= top_n:
         return sentences
 
-    # Convert each sentence to a set of words (lowercase, no stopwords)
+    # B) If stopwords not available, return first top_n
+    if not stop_words:
+        logger.warning("NLTK stopwords not found; returning first %d sentences", top_n)
+        return sentences[:top_n]
+
+    # C) Build sentence‐similarity graph
     def sent_to_set(s: str) -> set:
+        words = word_tokenize(s)
         return {
             w.lower()
-            for w in word_tokenize(s)
+            for w in words
             if w.isalpha() and w.lower() not in stop_words
         }
 
@@ -140,7 +166,6 @@ def textrank_extract(text: str, top_n: int = 20) -> List[str]:
     G = nx.Graph()
     G.add_nodes_from(range(len(sentences)))
 
-    # Build edges weighted by Jaccard similarity
     for i, j in combinations(range(len(sentences)), 2):
         inter = vectors[i].intersection(vectors[j])
         union = vectors[i].union(vectors[j])
@@ -289,10 +314,14 @@ def summarize_body(summarizer, body: str) -> str:
     if not body:
         return ""
 
-    # A) Extractive pre-filter (TextRank) if body is long
-    if len(body.split()) > 200:  # only run TextRank on long bodies (>200 words)
-        key_sentences = textrank_extract(body, top_n=20)
-        body = " ".join(key_sentences)
+    # A) Extractive pre-filter (TextRank) if body is long (>200 words)
+    if len(body.split()) > 200:
+        try:
+            key_sentences = textrank_extract(body, top_n=20)
+            body = " ".join(key_sentences)
+        except Exception as e:
+            logger.warning("TextRank extraction failed: %s", e)
+            # Continue using full body
 
     # 1) Normalize whitespace
     text = re.sub(r"\s+", " ", body.strip())
@@ -428,7 +457,7 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str):
         # 3c) Timeline point → first sentence
         timeline_pt = extract_first_sentence(body)
 
-        # 3d) Body summary (extractive + overlapping chunk ↑)
+        # 3d) Body summary (extractive + overlapping chunk summarization)
         body_summary = summarize_body(summarizer_pipe, body)
 
         records.append({
