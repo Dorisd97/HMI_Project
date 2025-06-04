@@ -1,5 +1,3 @@
-# src/visualisation/clustering_app.py
-
 import streamlit as st
 import json
 import pandas as pd
@@ -18,30 +16,59 @@ from src.analysis.clustering_and_stories import EmailClusteringAndStories
 def load_existing_results():
     """Load existing clustering results if they exist"""
     try:
+        stories = {}
+        summary = {}
+        df = pd.DataFrame()
+
         # Load stories
         if os.path.exists(CLUSTER_STORIES_PATH):
-            with open(CLUSTER_STORIES_PATH, 'r') as f:
-                stories = json.load(f)
-        else:
-            stories = {}
+            try:
+                with open(CLUSTER_STORIES_PATH, 'r') as f:
+                    stories = json.load(f)
+            except (json.JSONDecodeError, Exception) as e:
+                st.warning(f"Corrupted stories file found. Cleaning up...")
+                try:
+                    os.remove(CLUSTER_STORIES_PATH)
+                except:
+                    pass
+                stories = {}
 
         # Load summary
         if os.path.exists(CLUSTER_SUMMARY_PATH):
-            with open(CLUSTER_SUMMARY_PATH, 'r') as f:
-                summary = json.load(f)
-        else:
-            summary = {}
+            try:
+                with open(CLUSTER_SUMMARY_PATH, 'r') as f:
+                    summary = json.load(f)
+            except (json.JSONDecodeError, Exception) as e:
+                st.warning(f"Corrupted summary file found. Cleaning up...")
+                try:
+                    os.remove(CLUSTER_SUMMARY_PATH)
+                except:
+                    pass
+                summary = {}
 
         # Load emails with clusters
         if os.path.exists(EMAILS_WITH_CLUSTERS_PATH):
-            df = pd.read_csv(EMAILS_WITH_CLUSTERS_PATH)
-        else:
-            df = pd.DataFrame()
+            try:
+                df = pd.read_csv(EMAILS_WITH_CLUSTERS_PATH)
+            except Exception as e:
+                st.warning(f"Corrupted CSV file found. Cleaning up...")
+                try:
+                    os.remove(EMAILS_WITH_CLUSTERS_PATH)
+                except:
+                    pass
+                df = pd.DataFrame()
 
         return stories, summary, df
 
     except Exception as e:
-        st.error(f"Error loading existing results: {str(e)}")
+        st.warning(f"Cleaning up corrupted results files...")
+        # Clean up any corrupted files
+        for path in [CLUSTER_STORIES_PATH, CLUSTER_SUMMARY_PATH, EMAILS_WITH_CLUSTERS_PATH]:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except:
+                pass
         return {}, {}, pd.DataFrame()
 
 
@@ -149,11 +176,11 @@ def main():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.write("**Refined JSON:**")
-            if os.path.exists(REFINED_JSON_PATH):
-                st.success(f"✅ Found: {os.path.basename(REFINED_JSON_PATH)}")
+            st.write("**Cleaned JSON:**")
+            if os.path.exists(CLEANED_JSON_PATH):
+                st.success(f"✅ Found: {os.path.basename(CLEANED_JSON_PATH)}")
             else:
-                st.error(f"❌ Missing: {os.path.basename(REFINED_JSON_PATH)}")
+                st.error(f"❌ Missing: {os.path.basename(CLEANED_JSON_PATH)}")
 
         with col2:
             st.write("**Entities JSON:**")

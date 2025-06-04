@@ -10,7 +10,7 @@ import os
 import sys
 
 # Add the parent directory to the path to import config
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from src.config.config import REFINED_JSON_PATH, CLEANED_JSON_PATH, EXTRACTED_ENTITIES_JSON_PATH
 
 # Configure Streamlit page
