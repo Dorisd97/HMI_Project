@@ -429,22 +429,19 @@ def summarize_body(summarizer, body: str) -> str:
         return combined_summary
 
 
-# ─────────── 5) MAIN: BUILD & PICKLE DATAFRAME IN BATCHES OF 50 ───────────
-def build_and_pickle(email_json_path: str, output_pickle_path: str, batch_size: int = 50):
+# ─────────── 5) MAIN: BUILD & PICKLE DATAFRAME ───────────
+def build_and_pickle(email_json_path: str, output_pickle_path: str):
     logger.info("Starting build_and_pickle process")
     # 1) Load + clean all emails
-    all_emails = load_and_prepare_emails(email_json_path)
-
-    # Only process the first 50 emails (single batch)
-    emails_to_process = all_emails[:batch_size]
-    logger.info("Processing first %d emails (batch size)", len(emails_to_process))
+    emails = load_and_prepare_emails(email_json_path)
 
     # 2) Build NLP pipelines (sentiment + QA + summarizer)
     sentiment_pipe, qa_pipe, summarizer_pipe = build_nlp_pipelines()
 
-    # 3) Process this batch of emails
+    logger.info("Beginning to process %d emails", len(emails))
+    # 3) For each email, compute Purpose / Tone / TimelinePoint / BodySummary
     records = []
-    for e in tqdm(emails_to_process, desc="Processing emails"):
+    for e in tqdm(emails, desc="Processing emails"):
         body = e["Body"]
         # 3a) Tone (sentiment) → feed up to 512 chars
         try:
@@ -484,8 +481,7 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str, batch_size: 
     with open(output_pickle_path, "wb") as fout:
         pickle.dump(df, fout)
         logger.info(
-            "Pickled DataFrame (first %d emails) with shape %s → %s",
-            len(df),
+            "Pickled DataFrame with shape %s → %s",
             df.shape,
             output_pickle_path
         )
@@ -497,8 +493,8 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str, batch_size: 
 if __name__ == "__main__":
     try:
         logger.info("Starting email_pickle.py")
-        build_and_pickle(RAW_JSON_PATH, OUTPUT_PICKLE, batch_size=50)
-        logger.info("Done building and pickling first 50 emails.")
+        build_and_pickle(RAW_JSON_PATH, OUTPUT_PICKLE)
+        logger.info("Done building and pickling emails.")
     except Exception as exc:
         logger.error("ERROR in build_and_pickle: %s", exc)
         exit(1)
