@@ -1,6 +1,6 @@
 """
-Ollama Mistral Email Cleaner - JSON Input Only
-Clean version that works with JSON email data
+Ollama Mistral Email Cleaner - JSON Input with BodyChain Support
+Enhanced version that processes BodyChain email conversation threads
 """
 
 import re
@@ -18,22 +18,22 @@ try:
 
     BASE_DIR = config.BASE_DIR
     # Use different paths for JSON input/output
-    INPUT_JSON = config.CLEANED_JSON_PATH  # Source JSON file
-    OUTPUT_JSON = os.path.join(BASE_DIR, 'data', 'enron_complete_cleaned2.json')  # Output JSON file
+    INPUT_JSON = os.path.join(BASE_DIR, 'data', 'cleaned_body_chain_enron.json')  # Source JSON file
+    OUTPUT_JSON = os.path.join(BASE_DIR, 'data', 'enron_complete_cleaned4.json')  # Output JSON file
     print(f"✅ Using config.py - Base directory: {BASE_DIR}")
 except ImportError:
     print("⚠️ Config not found, using current directory")
     BASE_DIR = os.getcwd()
-    INPUT_JSON = 'cleaned_enron.json'
-    OUTPUT_JSON = 'enron_complete_cleaned2.json'
+    INPUT_JSON = 'cleaned_body_chain_enron.json'
+    OUTPUT_JSON = 'enron_complete_cleaned3.json'
 
 # Ollama Configuration for Mistral
 OLLAMA_CONFIG = {
     "model": "mistral",  # Can also use "mistral:7b", "mistral:instruct", etc.
     "base_url": "http://localhost:11434",
     "temperature": 0.1,
-    "timeout": 60,  # Longer timeout for local processing
-    "max_tokens": 2000,
+    "timeout": 120,  # Longer timeout for processing BodyChain
+    "max_tokens": 3000,  # Increased for BodyChain processing
     "batch_delay": 1,  # Delay between requests to prevent overload
     "retry_count": 3,
     "retry_delay": 5
@@ -172,17 +172,20 @@ class OllamaMistralCleaner:
             return []
 
     def extract_email_content_from_json(self, email_data: Dict) -> Dict[str, str]:
-        """Extract email content from JSON email object"""
+        """Extract email content from JSON email object including BodyChain"""
         try:
             # Handle different JSON email formats
             raw_data = {}
 
-            # Try different common field names for headers
+            # Standard header mappings for main email
             header_mappings = {
-                'subject': ['subject', 'Subject', 'title', 'Title'],
-                'from': ['from', 'From', 'sender', 'Sender', 'from_email'],
-                'to': ['to', 'To', 'recipient', 'Recipient', 'to_email', 'recipients'],
-                'date': ['date', 'Date', 'timestamp', 'Timestamp', 'sent_date', 'created_date']
+                'subject': ['Subject', 'subject', 'title', 'Title'],
+                'from': ['From', 'from', 'sender', 'Sender', 'from_email'],
+                'to': ['To', 'to', 'recipient', 'Recipient', 'to_email', 'recipients'],
+                'date': ['Date', 'date', 'timestamp', 'Timestamp', 'sent_date', 'created_date'],
+                'message_id': ['Message-ID', 'message_id', 'id'],
+                'mime_version': ['Mime-Version', 'mime_version'],
+                'content_type': ['Content-Type', 'content_type']
             }
 
             for field, possible_keys in header_mappings.items():
@@ -193,8 +196,8 @@ class OllamaMistralCleaner:
                 if field not in raw_data:
                     raw_data[field] = ""
 
-            # Try different common field names for body
-            body_keys = ['body', 'Body', 'content', 'Content', 'text', 'Text', 'message', 'Message']
+            # Extract main email body
+            body_keys = ['Body', 'body', 'content', 'Content', 'text', 'Text', 'message', 'Message']
             body = ""
             for key in body_keys:
                 if key in email_data and email_data[key]:
@@ -203,25 +206,29 @@ class OllamaMistralCleaner:
 
             raw_data['body'] = body
 
-            # If no standard fields found, try to extract from nested structures
-            if not any(raw_data.values()):
-                # Try headers sub-object
-                if 'headers' in email_data:
-                    headers = email_data['headers']
-                    raw_data.update({
-                        'subject': str(headers.get('subject', headers.get('Subject', ''))),
-                        'from': str(headers.get('from', headers.get('From', ''))),
-                        'to': str(headers.get('to', headers.get('To', ''))),
-                        'date': str(headers.get('date', headers.get('Date', '')))
-                    })
+            # Extract BodyChain if present
+            body_chain = []
+            if 'BodyChain' in email_data and isinstance(email_data['BodyChain'], list):
+                for chain_item in email_data['BodyChain']:
+                    if isinstance(chain_item, dict):
+                        chain_entry = {
+                            'from': str(chain_item.get('From', '')),
+                            'sent': str(chain_item.get('Sent', '')),
+                            'to': str(chain_item.get('To', '')),
+                            'cc': str(chain_item.get('Cc', '')),
+                            'bcc': str(chain_item.get('Bcc', '')),
+                            'subject': str(chain_item.get('Subject', '')),
+                            'body': str(chain_item.get('Body', ''))
+                        }
+                        body_chain.append(chain_entry)
 
-                # Try content sub-object
-                if 'content' in email_data:
-                    content = email_data['content']
-                    if isinstance(content, dict):
-                        raw_data['body'] = str(content.get('body', content.get('text', content.get('message', ''))))
-                    else:
-                        raw_data['body'] = str(content)
+            raw_data['body_chain'] = body_chain
+            raw_data['body_chain_count'] = len(body_chain)
+
+            # Extract additional metadata
+            raw_data['source_file'] = str(email_data.get('SourceFile', ''))
+            raw_data['x_folder'] = str(email_data.get('X-Folder', ''))
+            raw_data['x_origin'] = str(email_data.get('X-Origin', ''))
 
             return raw_data
 
@@ -230,59 +237,89 @@ class OllamaMistralCleaner:
             return None
 
     def create_mistral_prompt(self, raw_email: Dict[str, str]) -> str:
-        """Create optimized prompt for Mistral model"""
-        # Limit body length for better processing
-        body = raw_email.get('body', '')[:3000]
+        """Create optimized prompt for Mistral model including BodyChain"""
+        # Limit main body length for better processing
+        main_body = raw_email.get('body', '')[:2000]
 
-        prompt = f"""<s>[INST] You are an expert email data processor. Clean and analyze this email data.
+        # Prepare BodyChain text
+        body_chain_text = ""
+        body_chain = raw_email.get('body_chain', [])
 
-EMAIL DATA:
+        if body_chain:
+            body_chain_text = "\n\nEMAIL CONVERSATION THREAD (BodyChain):\n"
+            for i, chain_item in enumerate(body_chain, 1):
+                body_chain_text += f"\n--- Email {i} in Thread ---\n"
+                body_chain_text += f"From: {chain_item.get('from', 'N/A')}\n"
+                body_chain_text += f"To: {chain_item.get('to', 'N/A')}\n"
+                body_chain_text += f"Subject: {chain_item.get('subject', 'N/A')}\n"
+                body_chain_text += f"Body: {chain_item.get('body', '')[:1000]}\n"
+
+        prompt = f"""<s>[INST] You are an expert email data processor. Clean and analyze this email data including conversation threads.
+
+MAIN EMAIL:
+Message-ID: {raw_email.get('message_id', 'N/A')}
 Subject: {raw_email.get('subject', 'N/A')}
 From: {raw_email.get('from', 'N/A')}
 To: {raw_email.get('to', 'N/A')}
 Date: {raw_email.get('date', 'N/A')}
+Source File: {raw_email.get('source_file', 'N/A')}
 
-Body:
-{body}
+Main Body:
+{main_body}
 
-TASK: Clean this email and extract structured information. Respond with ONLY a valid JSON object following this exact structure:
+{body_chain_text}
+
+TASK: Clean this email and analyze the complete conversation thread. Respond with ONLY a valid JSON object following this exact structure:
 
 {{
   "cleaned_headers": {{
     "date": "readable date",
     "from": "clean sender", 
     "to": "clean recipients",
-    "subject": "clean subject"
+    "subject": "clean subject",
+    "message_id": "message ID"
   }},
   "content": {{
     "main_message": "cleaned main content",
     "forwarded_content": "forwarded content or null",
-    "summary": "brief summary",
-    "word_count": number
+    "summary": "brief summary of entire conversation",
+    "word_count": number,
+    "thread_summary": "summary of conversation thread if BodyChain exists"
+  }},
+  "body_chain_analysis": {{
+    "has_conversation_thread": true/false,
+    "thread_length": number,
+    "participants": ["list of email participants"],
+    "thread_topics": ["main topics discussed in thread"],
+    "conversation_flow": "description of how conversation progressed"
   }},
   "entities": {{
-    "people": ["person names"],
-    "organizations": ["companies/orgs"], 
-    "locations": ["places"],
+    "people": ["person names from all emails"],
+    "organizations": ["companies/orgs from all emails"], 
+    "locations": ["places mentioned"],
     "amounts": ["money amounts"],
-    "dates": ["specific dates"],
-    "topics": ["main themes"]
+    "dates": ["specific dates mentioned"],
+    "topics": ["main themes across conversation"],
+    "projects": ["project names mentioned"]
   }},
   "analysis": {{
-    "type": "business/personal/alert/legal/meeting/other",
+    "type": "business/personal/alert/legal/meeting/project/other",
     "tone": "formal/informal/urgent/neutral",
     "has_forwarded": true/false,
+    "is_conversation_thread": true/false,
     "language": "english/other",
-    "confidence": 0.8
+    "confidence": 0.8,
+    "business_importance": "high/medium/low",
+    "contains_sensitive_info": true/false
   }}
 }}
 
 INSTRUCTIONS:
-- Remove email headers and technical artifacts
-- Clean formatting but keep meaning
-- Extract real entities mentioned in content
-- Separate forwarded content if present
-- Classify email type and tone accurately
+- Analyze both main email AND conversation thread (BodyChain)
+- Extract entities from entire conversation, not just main email
+- Identify conversation patterns and participant relationships
+- Separate main email content from thread discussion
+- Clean formatting but preserve all meaningful information
 - Return ONLY valid JSON, no other text [/INST]"""
 
         return prompt
@@ -354,7 +391,7 @@ INSTRUCTIONS:
             return None
 
     def process_json_email_with_mistral(self, email_data: Dict, email_index: int) -> Optional[Dict]:
-        """Process single email from JSON with Mistral"""
+        """Process single email from JSON with Mistral including BodyChain"""
         # Extract email content from JSON
         raw_email = self.extract_email_content_from_json(email_data)
         if not raw_email:
@@ -373,23 +410,28 @@ INSTRUCTIONS:
             "source_email_index": email_index,
             "original_data_keys": list(email_data.keys()),
             "processed_with": f"ollama/{self.config['model']}",
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
+            "has_body_chain": len(raw_email.get('body_chain', [])) > 0,
+            "body_chain_length": len(raw_email.get('body_chain', []))
         }
 
-        # Include original data for reference if needed
+        # Include original data for reference
         result["original_email"] = {
+            "message_id": raw_email.get('message_id', ''),
             "subject": raw_email.get('subject', ''),
             "from": raw_email.get('from', ''),
             "to": raw_email.get('to', ''),
-            "date": raw_email.get('date', '')
+            "date": raw_email.get('date', ''),
+            "source_file": raw_email.get('source_file', ''),
+            "body_chain_count": raw_email.get('body_chain_count', 0)
         }
 
         return result
 
     def process_emails_from_json(self, input_json_file: str = None, test_mode: bool = True, test_limit: int = 5):
-        """Main processing function for JSON input"""
-        print("🤖 Ollama Mistral Email Cleaner (JSON Input)")
-        print("=" * 60)
+        """Main processing function for JSON input with BodyChain support"""
+        print("🤖 Ollama Mistral Email Cleaner (JSON Input with BodyChain)")
+        print("=" * 70)
         print(f"🧠 Model: {self.config['model']}")
         print(f"🌐 Endpoint: {self.config['base_url']}")
 
@@ -419,20 +461,16 @@ INSTRUCTIONS:
         # Process emails
         processed_emails = []
 
-        print("🔄 Processing emails with Mistral...")
+        print("🔄 Processing emails with Mistral (including BodyChain analysis)...")
         start_time = time.time()
 
         for i, email_data in enumerate(emails, 1):
             # Get a preview of the email for logging
-            subject_preview = ""
-            if isinstance(email_data, dict):
-                # Try to find subject for preview
-                for key in ['subject', 'Subject', 'title']:
-                    if key in email_data:
-                        subject_preview = str(email_data[key])[:30]
-                        break
+            subject_preview = str(email_data.get('Subject', email_data.get('subject', 'No Subject')))[:30]
+            body_chain_count = len(email_data.get('BodyChain', []))
 
-            print(f"   📧 [{i}/{len(emails)}] {subject_preview}...")
+            chain_info = f" ({body_chain_count} thread emails)" if body_chain_count > 0 else ""
+            print(f"   📧 [{i}/{len(emails)}] {subject_preview}{chain_info}...")
 
             try:
                 cleaned_email = self.process_json_email_with_mistral(email_data, i - 1)
@@ -453,6 +491,9 @@ INSTRUCTIONS:
 
         processing_time = time.time() - start_time
 
+        # Calculate BodyChain statistics
+        body_chain_stats = self.calculate_body_chain_stats(processed_emails)
+
         # Create final result
         result = {
             "metadata": {
@@ -464,7 +505,8 @@ INSTRUCTIONS:
                 "successfully_processed": self.processed_count,
                 "failed_emails": self.failed_count,
                 "test_mode": test_mode,
-                "test_limit": test_limit if test_mode else None
+                "test_limit": test_limit if test_mode else None,
+                "body_chain_processing": True
             },
             "summary": {
                 "total_emails": len(processed_emails),
@@ -472,16 +514,18 @@ INSTRUCTIONS:
                 "avg_processing_time": round(processing_time / len(emails), 1) if emails else 0,
                 "email_types": self.get_distribution(processed_emails, 'analysis', 'type'),
                 "tones": self.get_distribution(processed_emails, 'analysis', 'tone'),
-                "languages": self.get_distribution(processed_emails, 'analysis', 'language')
+                "languages": self.get_distribution(processed_emails, 'analysis', 'language'),
+                "business_importance": self.get_distribution(processed_emails, 'analysis', 'business_importance'),
+                "body_chain_statistics": body_chain_stats
             },
             "emails": processed_emails
         }
 
         # Save result
         if test_mode:
-            output_file = OUTPUT_JSON.replace('.json', '_mistral_test.json')
+            output_file = OUTPUT_JSON.replace('.json', '_mistral_bodychain_test.json')
         else:
-            output_file = OUTPUT_JSON.replace('.json', '_mistral.json')
+            output_file = OUTPUT_JSON.replace('.json', '_mistral_bodychain.json')
 
         print(f"\n💾 Saving to {output_file}...")
         with open(output_file, 'w', encoding='utf-8') as f:
@@ -498,6 +542,13 @@ INSTRUCTIONS:
         print(f"   ⚡ Avg per email: {result['summary']['avg_processing_time']:.1f} seconds")
         print(f"   📁 Saved to: {output_file}")
 
+        # Show BodyChain statistics
+        print(f"\n🔗 BodyChain Analysis:")
+        print(f"   📧 Emails with conversation threads: {body_chain_stats['emails_with_threads']}")
+        print(f"   📊 Average thread length: {body_chain_stats['avg_thread_length']:.1f}")
+        print(f"   📈 Max thread length: {body_chain_stats['max_thread_length']}")
+        print(f"   🔗 Total conversation emails: {body_chain_stats['total_thread_emails']}")
+
         # Show sample
         if processed_emails:
             sample = processed_emails[0]
@@ -507,10 +558,55 @@ INSTRUCTIONS:
             print(f"   Original subject: {sample.get('original_email', {}).get('subject', 'N/A')[:50]}...")
             print(f"   Cleaned subject: {sample.get('cleaned_headers', {}).get('subject', 'N/A')[:50]}...")
             print(f"   Type: {sample.get('analysis', {}).get('type', 'N/A')}")
-            print(
-                f"   Entities: {len(sample.get('entities', {}).get('people', []))} people, {len(sample.get('entities', {}).get('organizations', []))} orgs")
+            print(f"   Has thread: {sample.get('body_chain_analysis', {}).get('has_conversation_thread', False)}")
+            print(f"   Thread length: {sample.get('body_chain_analysis', {}).get('thread_length', 0)}")
 
         return result
+
+    def calculate_body_chain_stats(self, processed_emails: List[Dict]) -> Dict:
+        """Calculate statistics about BodyChain processing"""
+        stats = {
+            "emails_with_threads": 0,
+            "total_thread_emails": 0,
+            "avg_thread_length": 0,
+            "max_thread_length": 0,
+            "thread_length_distribution": {},
+            "most_common_participants": {},
+            "conversation_types": {}
+        }
+
+        thread_lengths = []
+        all_participants = []
+
+        for email in processed_emails:
+            body_chain_analysis = email.get('body_chain_analysis', {})
+
+            if body_chain_analysis.get('has_conversation_thread', False):
+                stats["emails_with_threads"] += 1
+
+                thread_length = body_chain_analysis.get('thread_length', 0)
+                thread_lengths.append(thread_length)
+                stats["total_thread_emails"] += thread_length
+
+                # Track participants
+                participants = body_chain_analysis.get('participants', [])
+                all_participants.extend(participants)
+
+        if thread_lengths:
+            stats["avg_thread_length"] = sum(thread_lengths) / len(thread_lengths)
+            stats["max_thread_length"] = max(thread_lengths)
+
+            # Thread length distribution
+            for length in thread_lengths:
+                length_range = f"{length} emails"
+                stats["thread_length_distribution"][length_range] = stats["thread_length_distribution"].get(length_range, 0) + 1
+
+        # Most common participants
+        from collections import Counter
+        participant_counts = Counter(all_participants)
+        stats["most_common_participants"] = dict(participant_counts.most_common(10))
+
+        return stats
 
     def get_distribution(self, emails, section, field):
         """Get distribution of a field"""
@@ -521,144 +617,7 @@ INSTRUCTIONS:
         return dist
 
 
-def create_sample_json():
-    """Create a sample JSON file for testing"""
-    sample_emails = [
-        {
-            "subject": "Project Alpha - Q4 Results",
-            "from": "jeff.skilling@enron.com",
-            "to": "kenneth.lay@enron.com",
-            "date": "2001-01-15 09:30:00",
-            "body": """Ken,
 
-Our trading operations generated $2.3 billion in revenue this quarter. The California market continues to be volatile with FERC investigating our practices.
-
-Key highlights:
-- West Coast trading: $1.2B 
-- Gas operations: $800M
-- Risk management improvements implemented
-
-We should discuss the regulatory situation at tomorrow's board meeting.
-
-Best,
-Jeff Skilling
-President & COO"""
-        },
-        {
-            "subject": "URGENT: California Investigation Update",
-            "from": "susan.mara@enron.com",
-            "to": "jeff.dasovich@enron.com,james.steffes@enron.com",
-            "date": "2001-04-25 14:22:00",
-            "body": """Team,
-
-FERC is expanding their investigation into our California trading practices. Legal recommends immediate document preservation.
-
------ Forwarded from regulatory@ferc.gov -----
-Subject: Formal Investigation Notice
-
-Enron Corp is hereby notified of formal investigation into trading practices during California energy crisis. All relevant documents must be preserved.
-
-Investigation scope:
-- Power trading activities 2000-2001
-- Price manipulation allegations  
-- Market manipulation claims
-- Coordination with other generators
-
-Please coordinate response with legal team immediately.
-
-Susan Mara
-Government Affairs"""
-        },
-        {
-            "subject": "Re: Dabhol Project Status",
-            "from": "rebecca.mark@enron.com",
-            "to": "jeff.skilling@enron.com",
-            "date": "2000-11-08 11:45:00",
-            "body": """Jeff,
-
-The Dabhol situation in India is deteriorating rapidly. The Maharashtra state government is refusing to honor power purchase agreements.
-
-Current status:
-- $2.9 billion invested to date
-- Phase I operational but payments delayed
-- Phase II construction halted
-- Local political opposition increasing
-
-We may need to consider write-downs or exit strategies. The Indian government is not providing the support promised.
-
-Rebecca"""
-        },
-        {
-            "subject": "Analyst Call Preparation",
-            "from": "andrew.fastow@enron.com",
-            "to": "jeff.skilling@enron.com,kenneth.lay@enron.com",
-            "date": "2001-07-12 16:30:00",
-            "body": """Ken and Jeff,
-
-Preparing for next week's analyst call. Need to discuss how we present the following:
-
-Financial Highlights:
-- Revenue: $50.1 billion (up 151%)
-- Net income: $979 million 
-- Funds flow from operations: $4.8 billion
-- Total assets: $65.5 billion
-
-Key talking points:
-- Strong performance across all business units
-- Continued growth in wholesale energy operations
-- Broadband services expansion
-- International investments
-
-The Street is expecting strong guidance for Q3. We should emphasize our asset-light business model and recurring cash flows.
-
-Andy Fastow
-CFO"""
-        },
-        {
-            "subject": "Enron Online Platform Metrics",
-            "from": "louise.kitchen@enron.com",
-            "to": "jeff.skilling@enron.com",
-            "date": "2000-12-15 10:15:00",
-            "body": """Jeff,
-
-Enron Online continues to exceed expectations. December metrics:
-
-Platform Performance:
-- Daily transactions: $2.5 billion average
-- Total volume since launch: $350 billion
-- Active counterparties: 1,400+
-- Products traded: 1,800+
-
-Geographic breakdown:
-- North America: 78%
-- Europe: 15% 
-- Asia: 4%
-- Other: 3%
-
-The platform is capturing significant market share in natural gas and power trading. Margins remain strong due to our information advantage.
-
-Recommend continued investment in technology infrastructure and expansion into new commodities.
-
-Louise Kitchen
-President, Enron Online"""
-        }
-    ]
-
-    json_data = {
-        "metadata": {
-            "source": "Sample Enron emails for testing",
-            "created": datetime.now().isoformat(),
-            "total_emails": len(sample_emails)
-        },
-        "emails": sample_emails
-    }
-
-    # Save to input file
-    with open(INPUT_JSON, 'w', encoding='utf-8') as f:
-        json.dump(json_data, f, indent=2, ensure_ascii=False)
-
-    print(f"📄 Created sample JSON with {len(sample_emails)} emails: {INPUT_JSON}")
-    return INPUT_JSON
 
 
 def setup_ollama():
@@ -683,13 +642,13 @@ def setup_ollama():
     print("   Type: /bye (to exit)")
 
     print("\n5️⃣ Run this script:")
-    print("   python clean_ollama_mistral_cleaner.py")
+    print("   python ollama_mistral_cleaner_updated.py")
 
 
 def main():
     """Main execution function"""
-    print("🤖 Ollama Mistral Email Cleaner (JSON Input)")
-    print("=" * 60)
+    print("🤖 Ollama Mistral Email Cleaner (JSON Input with BodyChain)")
+    print("=" * 70)
 
     # Check if user needs setup help
     setup_help = input("📚 Need Ollama setup help? (y/n, default=n): ").lower() == 'y'
@@ -708,12 +667,8 @@ def main():
     # Check if input file exists
     if not os.path.exists(input_file):
         print(f"❌ Input file not found: {input_file}")
-        create_sample = input("📄 Create sample JSON file for testing? (y/n, default=y): ").lower() != 'n'
-        if create_sample:
-            input_file = create_sample_json()
-        else:
-            print("❌ Cannot proceed without input file")
-            return
+        print("❌ Cannot proceed without input file")
+        return
 
     # Get test parameters
     test_mode = input("\n🧪 Run in test mode? (y/n, default=y): ").lower() != 'n'
@@ -733,25 +688,20 @@ def main():
             return
 
     if result:
-        print(f"\n✨ Success! Mistral has intelligently cleaned your emails from JSON.")
-        print(f"🔍 JSON Processing Benefits:")
-        print(f"   ✅ Structured input - handles any JSON email format")
-        print(f"   ✅ Easy testing - just specify number of emails")
-        print(f"   ✅ No file extraction needed")
-        print(f"   ✅ Preserves original vs cleaned comparison")
-        print(f"   ✅ Fast and local processing")
+        print(f"\n✨ Success! Mistral has intelligently cleaned your emails with BodyChain analysis.")
+        print(f"🔍 Enhanced JSON Processing Benefits:")
+        print(f"   ✅ BodyChain conversation thread analysis")
+        print(f"   ✅ Multi-email thread entity extraction")
+        print(f"   ✅ Conversation flow analysis")
+        print(f"   ✅ Participant relationship mapping")
+        print(f"   ✅ Enhanced business context understanding")
 
-        # Show comparison
-        if result['emails']:
-            sample = result['emails'][0]
-            original = sample.get('original_email', {})
-            cleaned = sample.get('cleaned_headers', {})
-
-            print(f"\n📊 Example Before/After:")
-            print(f"   Original subject: {original.get('subject', 'N/A')[:50]}")
-            print(f"   Cleaned subject:  {cleaned.get('subject', 'N/A')[:50]}")
-            print(
-                f"   Analysis: {sample.get('analysis', {}).get('type', 'N/A')} email, {sample.get('analysis', {}).get('tone', 'N/A')} tone")
+        # Show BodyChain insights
+        body_chain_stats = result['summary']['body_chain_statistics']
+        print(f"\n🔗 BodyChain Insights:")
+        print(f"   📧 Emails with threads: {body_chain_stats['emails_with_threads']}")
+        print(f"   📊 Average thread length: {body_chain_stats['avg_thread_length']:.1f}")
+        print(f"   🔗 Total conversation emails: {body_chain_stats['total_thread_emails']}")
 
 
 if __name__ == "__main__":
