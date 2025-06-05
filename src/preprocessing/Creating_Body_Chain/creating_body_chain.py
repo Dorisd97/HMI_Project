@@ -179,7 +179,7 @@ def validate_email_fields(email_block: Dict[str, str]) -> bool:
     return any(email_block.get(field, "").strip() for field in required_fields)
 
 
-def process_first_n_emails(input_path: str, output_path: str, limit: int = 50) -> None:
+def process_first_n_emails(input_path: str, output_path: str) -> None:
     """
     Process the first N emails from input JSON file.
 
@@ -199,7 +199,7 @@ def process_first_n_emails(input_path: str, output_path: str, limit: int = 50) -
         processed_count = 0
         chain_count = 0
 
-        for idx, email in enumerate(data[:limit]):
+        for idx, email in enumerate(data):
             if not isinstance(email, dict):
                 logging.warning(f"[{idx + 1}] Skipping non-dict entry")
                 continue
@@ -238,7 +238,7 @@ def process_first_n_emails(input_path: str, output_path: str, limit: int = 50) -
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
 
-        logging.info(f"✅ Successfully processed {processed_count}/{limit} emails")
+        logging.info(f"✅ Successfully processed {processed_count} emails")
         logging.info(f"✅ Total email chains extracted: {chain_count}")
         logging.info(f"✅ Saved results to {output_path}")
 
@@ -253,6 +253,5 @@ def process_first_n_emails(input_path: str, output_path: str, limit: int = 50) -
 if __name__ == "__main__":
     process_first_n_emails(
         input_path=CLEANED_JSON_PATH,
-        output_path=BODY_CHAIN_OUTPUT_PATH,
-        limit=50
+        output_path=BODY_CHAIN_OUTPUT_PATH
     )
