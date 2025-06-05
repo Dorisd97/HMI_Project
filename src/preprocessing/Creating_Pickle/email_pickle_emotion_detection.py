@@ -451,14 +451,14 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str):
             tone = "UNKNOWN"
             logger.warning("Sentiment analysis failed for EmailID %s: %s", e["EmailID"], ex)
 
-        # 3b) Why was this email sent? (QA on first 1 024 chars)
-        purpose = answer_why_sent(qa_pipe, body)
-
-        # 3c) Timeline point → first sentence
-        timeline_pt = extract_first_sentence(body)
-
-        # 3d) Body summary (extractive + overlapping chunk summarization)
-        body_summary = summarize_body(summarizer_pipe, body)
+        # # 3b) Why was this email sent? (QA on first 1 024 chars)
+        # purpose = answer_why_sent(qa_pipe, body)
+        #
+        # # 3c) Timeline point → first sentence
+        # timeline_pt = extract_first_sentence(body)
+        #
+        # # 3d) Body summary (extractive + overlapping chunk summarization)
+        # body_summary = summarize_body(summarizer_pipe, body)
 
         records.append({
             "EmailID":       e["EmailID"],
@@ -466,10 +466,7 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str):
             "Subject":       e["Subject"],
             "DateTime":      e["DateTime"],
             "Body":          body,
-            "Purpose":       purpose,
             "Tone":          tone,
-            "TimelinePoint": timeline_pt,
-            "BodySummary":   body_summary
         })
 
     # 4) Build DataFrame & pickle
