@@ -2,10 +2,11 @@ import json
 import re
 import ollama
 from typing import Dict, List, Any
+from src.config import config
 
-INPUT_FILE = "/data/cleaned_body_chain_enron.json"
-OUTPUT_FILE = "/data/enron_test_analysis_results.json"
-MAX_EMAILS = 50  # Process only first N emails
+INPUT_FILE = config.CLEANED_BODYCHAIN_JSON_PATH
+OUTPUT_FILE = config.PROCESSED_JSON_OUTPUT
+MAX_EMAILS = 7220  # Process only first N emails
 BATCH_SIZE = 10  # Process emails in batches of N
 
 def extract_email_data(raw_content: str) -> List[Dict[str, Any]]:
