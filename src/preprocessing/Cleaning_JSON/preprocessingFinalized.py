@@ -1,22 +1,12 @@
-#!/usr/bin/env python3
-"""
-Single-file Email Analyzer using Ollama Mistral
-Configure the input and output file paths in the CONFIGURATION section below, then run: python email_analyzer.py
-"""
-
 import json
 import re
 import ollama
 from typing import Dict, List, Any
 
-# ==================== CONFIGURATION ====================
-INPUT_FILE = "D:\Projects\HMI\HMI_Project\data\cleaned_body_chain_enron.json"  # Change this to your input file path
-OUTPUT_FILE = "D:\Projects\HMI\HMI_Project\data\enron_test_analysis_results.json"  # Change this to your desired output file path
+INPUT_FILE = "/data/cleaned_body_chain_enron.json"
+OUTPUT_FILE = "/data/enron_test_analysis_results.json"
 MAX_EMAILS = 50  # Process only first N emails
 BATCH_SIZE = 10  # Process emails in batches of N
-
-
-# ========================================================
 
 def extract_email_data(raw_content: str) -> List[Dict[str, Any]]:
     """Extract email data from raw JSON content"""
