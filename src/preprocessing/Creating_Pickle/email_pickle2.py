@@ -80,7 +80,7 @@ def clean_email_content(content: str) -> str:
     text = re.sub(r"-----Original Message-----.*", "", text, flags=re.DOTALL)
     text = re.sub(r"<[^>]+>", " ", text)              # strip HTML tags
     text = re.sub(r"https?://\S+", "", text)          # strip URLs
-    text = re.sub(r"\S+@\S+\.\S+", "", text)        # strip email addresses
+    text = re.sub(r"\S+@\S+\.\S+", "", text)          # strip email addresses
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -177,17 +177,18 @@ def build_nlp_pipelines():
     """
     1) sentiment‐analyzer (for “tone”)          → GPU if available
     2) question‐answerer (for “Why was this email sent?”) → GPU if available
-    3) summarizer (for full-body summary) using facebook/bart-large-cnn
+    3) tokenizer + seq2seq model for CodeT5 (no pipeline)
+       so we can call `.generate(...)` directly and avoid conflicting kwargs.
     """
     # Check GPU
     cuda_ok = torch.cuda.is_available()
     logger.info("torch.cuda.is_available(): %s", cuda_ok)
     if cuda_ok:
+        device = torch.device("cuda")
         logger.info("Using GPU: %s", torch.cuda.get_device_name(0))
-        device_id = 0
     else:
+        device = torch.device("cpu")
         logger.info("No GPU found; pipelines will run on CPU")
-        device_id = -1
 
     # Ensure cache directory exists
     os.makedirs(HF_CACHE_DIR, exist_ok=True)
@@ -202,12 +203,12 @@ def build_nlp_pipelines():
     model_sent = AutoModelForSequenceClassification.from_pretrained(
         sentiment_model,
         cache_dir=HF_CACHE_DIR
-    )
+    ).to(device)
     sentiment_pipe = pipeline(
         "sentiment-analysis",
         model=model_sent,
         tokenizer=tokenizer_sent,
-        device=device_id
+        device=0 if cuda_ok else -1
     )
     logger.info("Successfully loaded sentiment model: %s", sentiment_model)
 
@@ -220,35 +221,33 @@ def build_nlp_pipelines():
     model_qa = AutoModelForQuestionAnswering.from_pretrained(
         qa_model,
         cache_dir=HF_CACHE_DIR
-    )
+    ).to(device)
     qa_pipe = pipeline(
         "question-answering",
         model=model_qa,
         tokenizer=tokenizer_qa,
-        device=device_id
+        device=0 if cuda_ok else -1
     )
     logger.info("Successfully loaded QA model: %s", qa_model)
 
-    # ─── (3) Summarization: switch to facebook/bart-large-cnn ──────────────────
-    summarization_model = "facebook/bart-large-cnn"
+    # ─── (3) Summarization: load CodeT5 tokenizer + model for direct `.generate(...)` ──────────────────
+    summarization_model = "Salesforce/codet5-base"
     logger.info("Loading summarization model: %s", summarization_model)
+
     tokenizer_sum = AutoTokenizer.from_pretrained(
         summarization_model,
         cache_dir=HF_CACHE_DIR
     )
+
     model_sum = AutoModelForSeq2SeqLM.from_pretrained(
         summarization_model,
         cache_dir=HF_CACHE_DIR
-    )
-    summarizer_pipe = pipeline(
-        "summarization",
-        model=model_sum,
-        tokenizer=tokenizer_sum,
-        device=device_id
-    )
-    logger.info("Successfully loaded summarization model: %s", summarization_model)
+    ).to(device)
 
-    return sentiment_pipe, qa_pipe, summarizer_pipe
+    logger.info("Successfully loaded CodeT5 model and tokenizer: %s", summarization_model)
+
+    # Return everything we need (instead of a “pipeline” for summarization)
+    return sentiment_pipe, qa_pipe, (tokenizer_sum, model_sum, device)
 
 
 def answer_why_sent(qa_pipeline, body: str) -> str:
@@ -267,15 +266,21 @@ def answer_why_sent(qa_pipeline, body: str) -> str:
         return ""
 
 
-def summarize_body(summarizer, body: str) -> str:
+def summarize_body(code_t5_components, body: str) -> str:
     """
-    Summarize the full body of an email in two stages with overlapping chunks:
-      1) (Optional) Extract top sentences via TextRank (for >300 words).
-      2) Split into ~3000-character chunks with 2000-character overlap.
-      3) Summarize each chunk independently (up to 75 tokens per chunk).
-      4) Concatenate chunk summaries.
-      5) Final summarization pass on concatenated text (up to 100 tokens).
+    Summarize the full body of an email in two stages with overlapping chunks,
+    now by calling CodeT5’s `.generate(...)` directly:
+
+    1) (Optional) Extract top sentences via TextRank (for >300 words).
+    2) Tokenize and split into ~512-token chunks with 100-token overlap.
+    3) Summarize each chunk by computing max_length/min_length manually and
+       calling model.generate(...) directly (no pipeline, no early_stopping).
+    4) Concatenate chunk summaries.
+    5) Final summarization pass on concatenated text, again calling `.generate(...)`
+       without `early_stopping`.
     """
+    tokenizer_sum, model_sum, device = code_t5_components
+
     if not body:
         return ""
 
@@ -291,95 +296,109 @@ def summarize_body(summarizer, body: str) -> str:
     # Normalize whitespace
     text = re.sub(r"\s+", " ", body).strip()
 
-    # (2) Build overlapping chunks
-    chunk_size = 3000
-    overlap    = 2000
+    # (2) Tokenize entire text so we can create overlapping chunks
+    all_tokens = tokenizer_sum.encode(text, add_special_tokens=False)
+    max_tokens = 512            # CodeT5’s true encoder max
+    overlap_tokens = 100
+
     chunks = []
-    start = 0
-    length = len(text)
-    while start < length:
-        end = start + chunk_size
-        if end >= length:
-            chunks.append(text[start:])
-            break
+    idx = 0
+    total_tokens = len(all_tokens)
+    while idx < total_tokens:
+        end_idx = min(idx + max_tokens, total_tokens)
+        chunk_tokens = all_tokens[idx:end_idx]
+        chunk_text = tokenizer_sum.decode(chunk_tokens, clean_up_tokenization_spaces=False)
+        chunks.append(chunk_text)
+        step = max_tokens - overlap_tokens
+        idx = end_idx if (end_idx <= idx + step) else idx + step
 
-        split_point = text.rfind(".", start + chunk_size - overlap, end)
-        if split_point == -1 or split_point < start + chunk_size - overlap:
-            split_point = end
-        else:
-            split_point += 1
-
-        chunks.append(text[start:split_point].strip())
-        start = max(split_point - overlap, split_point)
-
-    # (3) Summarize each chunk with larger token limits
+    # (3) Summarize each chunk by direct model.generate(...)
     chunk_summaries = []
-    for chunk in chunks:
-        inputs = summarizer.tokenizer(
-            chunk,
-            return_tensors="pt",
-            truncation=True,
-            max_length=1024
-        )
-        input_len = inputs.input_ids.shape[-1]
-
-        if input_len <= 20:
-            chunk_summaries.append(chunk)
+    for chunk_text in chunks:
+        if not isinstance(chunk_text, str):
+            logger.warning("Chunk is not a string, skipping: %r", chunk_text)
             continue
 
+        # Tokenize for input
+        inputs = tokenizer_sum(
+            chunk_text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_tokens
+        ).to(device)
+
+        input_ids = inputs.input_ids
+        attention_mask = inputs.attention_mask
+        input_len = input_ids.shape[-1]
+        if input_len <= 20:
+            # If chunk is very short, keep it as-is
+            chunk_summaries.append(chunk_text.strip())
+            continue
+
+        # Decide how many new tokens we want for this chunk's summary:
         if input_len <= 200:
-            out_max_len = max(10, int(input_len * 0.75))
-            out_min_len = max(5,  int(input_len * 0.4))
+            desired_summary_tokens = max(20, int(input_len * 0.3))
         else:
-            out_max_len = 75
-            out_min_len = 30
+            desired_summary_tokens = 100
+
+        # Compute total max_length = input_len + desired_summary_tokens
+        max_length = input_len + desired_summary_tokens
+        # Ensure min_length < max_length:
+        min_length = min(20, max_length - 1)
 
         try:
-            summary_out = summarizer(
-                chunk,
-                max_length=out_max_len,
-                min_length=out_min_len,
+            # Directly call generate(), without early_stopping
+            out_ids = model_sum.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_length=max_length,
+                min_length=min_length,
                 do_sample=False,
-                truncation=True
+                no_repeat_ngram_size=2   # optional: encourage diversity
             )
-            chunk_summaries.append(summary_out[0]["summary_text"].strip())
+            summary_text = tokenizer_sum.decode(out_ids[0], skip_special_tokens=True).strip()
+            chunk_summaries.append(summary_text)
         except Exception as e:
             logger.warning("Chunk summarization failed: %s", e)
-            chunk_summaries.append(chunk[:200].strip())
+            chunk_summaries.append(chunk_text[:200].strip())
 
     if not chunk_summaries:
         return ""
 
     combined_summary = " ".join(chunk_summaries)
 
-    # (4) Final summarization pass: allow up to 100 tokens
-    inputs = summarizer.tokenizer(
+    # (4) Final summarization pass on the combined summary
+    inputs = tokenizer_sum(
         combined_summary,
         return_tensors="pt",
         truncation=True,
-        max_length=1024
-    )
-    input_len = inputs.input_ids.shape[-1]
+        max_length=max_tokens
+    ).to(device)
 
+    input_ids = inputs.input_ids
+    attention_mask = inputs.attention_mask
+    input_len = input_ids.shape[-1]
     if input_len <= 20:
         return combined_summary.strip()
 
     if input_len <= 200:
-        out_max_len = max(10, int(input_len * 0.75))
-        out_min_len = max(5,  int(input_len * 0.4))
+        desired_summary_tokens = max(20, int(input_len * 0.3))
     else:
-        out_max_len = 100
-        out_min_len = 50
+        desired_summary_tokens = 150
+
+    max_length = input_len + desired_summary_tokens
+    min_length = min(30, max_length - 1)
 
     try:
-        final_out = summarizer(
-            combined_summary,
-            max_length=out_max_len,
-            min_length=out_min_len,
+        out_ids = model_sum.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=max_length,
+            min_length=min_length,
             do_sample=False,
-            truncation=True
+            no_repeat_ngram_size=2
         )
-        return final_out[0]["summary_text"].strip()
+        return tokenizer_sum.decode(out_ids[0], skip_special_tokens=True).strip()
     except Exception as e:
         logger.warning("Final summarization pass failed: %s", e)
         return combined_summary
@@ -387,7 +406,7 @@ def summarize_body(summarizer, body: str) -> str:
 
 # ─────────── 5) MAIN: BUILD & PICKLE DATAFRAME IN BATCHES OF 50 ───────────
 def build_and_pickle(email_json_path: str, output_pickle_path: str, batch_size: int = 50):
-    logger.info("Starting build_and_pickle process (with BART-large-CNN summaries)")
+    logger.info("Starting build_and_pickle process (with CodeT5 summaries)")
     # 1) Load + clean all emails
     all_emails = load_and_prepare_emails(email_json_path)
 
@@ -395,13 +414,13 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str, batch_size: 
     emails_to_process = all_emails[:batch_size]
     logger.info("Processing first %d emails (batch size)", len(emails_to_process))
 
-    # 2) Build NLP pipelines (sentiment + QA + summarizer)
-    sentiment_pipe, qa_pipe, summarizer_pipe = build_nlp_pipelines()
+    # 2) Build NLP pipelines (sentiment + QA) and CodeT5 (tokenizer, model, device)
+    sentiment_pipe, qa_pipe, code_t5_components = build_nlp_pipelines()
 
     # 3) Process this batch of emails
     records = []
     for e in tqdm(emails_to_process, desc="Processing emails"):
-        body = e["Body"]
+        body = e["Body"] or ""
         # 3a) Tone (sentiment) → feed up to 512 chars
         try:
             s = sentiment_pipe(body[:512])[0]
@@ -413,8 +432,8 @@ def build_and_pickle(email_json_path: str, output_pickle_path: str, batch_size: 
         # 3b) Why was this email sent? (QA on first 1 024 chars)
         purpose = answer_why_sent(qa_pipe, body)
 
-        # 3c) Body summary (extractive + overlapping chunk summarization)
-        body_summary = summarize_body(summarizer_pipe, body)
+        # 3c) Body summary (extractive + overlapping-chunk summarization via CodeT5)
+        body_summary = summarize_body(code_t5_components, body)
 
         records.append({
             "EmailID":     e["EmailID"],
