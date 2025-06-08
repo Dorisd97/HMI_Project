@@ -4,7 +4,7 @@ import ollama
 from typing import Dict, List, Any
 from src.config import config
 
-INPUT_FILE = config.CLEANED_BODYCHAIN_JSON_PATH
+INPUT_FILE = config.CLEANED_BODY_CHAIN_JSON_PATH
 OUTPUT_FILE = config.PROCESSED_JSON_OUTPUT
 MAX_EMAILS = 7220  # Process only first N emails
 BATCH_SIZE = 10  # Process emails in batches of N
