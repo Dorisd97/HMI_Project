@@ -15,6 +15,9 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+# Import the config
+from src.config.config import PROCESSED_JSON_OUTPUT
+
 # Set page configuration
 st.set_page_config(
     page_title="Kohonen SOM Analyzer",
@@ -181,11 +184,11 @@ class EmailFeatureExtractor:
         return features
 
 
-def load_json_data(uploaded_file):
-    """Load JSON data from uploaded file"""
+def load_json_data_from_config():
+    """Load JSON data from the configured path"""
     try:
-        content = uploaded_file.read()
-        data = json.loads(content)
+        with open(PROCESSED_JSON_OUTPUT, 'r', encoding='utf-8') as f:
+            data = json.load(f)
 
         if isinstance(data, list):
             emails = data
@@ -197,8 +200,15 @@ def load_json_data(uploaded_file):
             emails = [data] if not isinstance(list(data.values())[0], list) else list(data.values())[0]
 
         return emails
+    except FileNotFoundError:
+        st.error(f"❌ JSON file not found at: {PROCESSED_JSON_OUTPUT}")
+        st.info("Please ensure the JSON file exists at the configured path.")
+        return None
+    except json.JSONDecodeError as e:
+        st.error(f"❌ Error parsing JSON file: {str(e)}")
+        return None
     except Exception as e:
-        st.error(f"Error loading JSON: {str(e)}")
+        st.error(f"❌ Error loading JSON: {str(e)}")
         return None
 
 
@@ -311,91 +321,90 @@ def analyze_clusters_detailed(som, mapped_data, original_data):
 def main():
     st.title("🧠 Kohonen Self-Organizing Map Analyzer")
     st.markdown("### Interactive Email Dataset Clustering and Visualization")
+    st.info(f"📁 Loading data from: `{PROCESSED_JSON_OUTPUT}`")
 
     # Sidebar for configuration
     st.sidebar.header("Configuration")
 
-    # File upload
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload JSON Dataset",
-        type=['json'],
-        help="Upload a JSON file containing email data"
-    )
-
-    if uploaded_file is not None:
-        # Load and preview data
+    # Load data automatically
+    if st.sidebar.button("🔄 Load Data", type="primary"):
         with st.spinner("Loading dataset..."):
-            emails_data = load_json_data(uploaded_file)
+            emails_data = load_json_data_from_config()
 
         if emails_data is not None:
+            st.session_state.emails_data = emails_data
             st.success(f"✅ Loaded {len(emails_data)} emails from dataset")
 
-            # Data preview
-            with st.expander("📊 Dataset Preview", expanded=False):
-                if len(emails_data) > 0:
-                    sample_email = emails_data[0]
-                    st.json(sample_email)
+    # Check if data is loaded
+    if hasattr(st.session_state, 'emails_data'):
+        emails_data = st.session_state.emails_data
 
-                    # Basic statistics
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Emails", len(emails_data))
-                    with col2:
-                        classifications = [email.get('classification', 'Unknown') for email in emails_data]
-                        st.metric("Unique Classifications", len(set(classifications)))
-                    with col3:
-                        avg_summary_length = np.mean([len(email.get('summary', '')) for email in emails_data])
-                        st.metric("Avg Summary Length", f"{avg_summary_length:.0f}")
+        # Data preview
+        with st.expander("📊 Dataset Preview", expanded=False):
+            if len(emails_data) > 0:
+                sample_email = emails_data[0]
+                st.json(sample_email)
 
-            # SOM Configuration
-            st.sidebar.subheader("SOM Parameters")
-            som_width = st.sidebar.slider("SOM Width", 5, 15, 10)
-            som_height = st.sidebar.slider("SOM Height", 5, 15, 8)
-            epochs = st.sidebar.slider("Training Epochs", 100, 2000, 500)
-            learning_rate = st.sidebar.slider("Learning Rate", 0.01, 0.5, 0.1)
+                # Basic statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Emails", len(emails_data))
+                with col2:
+                    classifications = [email.get('classification', 'Unknown') for email in emails_data]
+                    st.metric("Unique Classifications", len(set(classifications)))
+                with col3:
+                    avg_summary_length = np.mean([len(email.get('summary', '')) for email in emails_data])
+                    st.metric("Avg Summary Length", f"{avg_summary_length:.0f}")
 
-            # Data size limit
-            max_emails = st.sidebar.slider("Max Emails to Process", 100, min(2000, len(emails_data)),
-                                           min(1000, len(emails_data)))
+        # SOM Configuration
+        st.sidebar.subheader("SOM Parameters")
+        som_width = st.sidebar.slider("SOM Width", 5, 15, 10)
+        som_height = st.sidebar.slider("SOM Height", 5, 15, 8)
+        epochs = st.sidebar.slider("Training Epochs", 100, 2000, 500)
+        learning_rate = st.sidebar.slider("Learning Rate", 0.01, 0.5, 0.1)
 
-            if st.sidebar.button("🚀 Train SOM", type="primary"):
-                # Limit data size for performance
-                working_data = emails_data[:max_emails]
+        # Data size limit
+        max_emails = st.sidebar.slider("Max Emails to Process", 100, min(2000, len(emails_data)),
+                                       min(1000, len(emails_data)))
 
-                # Feature extraction
-                with st.spinner("Extracting features..."):
-                    feature_extractor = EmailFeatureExtractor()
-                    features, features_df = feature_extractor.extract_features(working_data)
+        if st.sidebar.button("🚀 Train SOM", type="primary"):
+            # Limit data size for performance
+            working_data = emails_data[:max_emails]
 
-                st.success(f"✅ Extracted {features.shape[1]} features")
+            # Feature extraction
+            with st.spinner("Extracting features..."):
+                feature_extractor = EmailFeatureExtractor()
+                features, features_df = feature_extractor.extract_features(working_data)
 
-                # Train SOM
-                st.subheader("🔄 Training Self-Organizing Map")
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+            st.success(f"✅ Extracted {features.shape[1]} features")
 
-                def update_progress(current_epoch, total_epochs):
-                    progress = current_epoch / total_epochs
-                    progress_bar.progress(progress)
-                    status_text.text(f"Training: {current_epoch}/{total_epochs} epochs ({progress:.1%})")
+            # Train SOM
+            st.subheader("🔄 Training Self-Organizing Map")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-                som = KohonenSOM(som_width, som_height, features.shape[1],
-                                 learning_rate=learning_rate, sigma=max(som_width, som_height) / 2)
+            def update_progress(current_epoch, total_epochs):
+                progress = current_epoch / total_epochs
+                progress_bar.progress(progress)
+                status_text.text(f"Training: {current_epoch}/{total_epochs} epochs ({progress:.1%})")
 
-                som.train(features, epochs=epochs, progress_callback=update_progress)
+            som = KohonenSOM(som_width, som_height, features.shape[1],
+                             learning_rate=learning_rate, sigma=max(som_width, som_height) / 2)
 
-                progress_bar.progress(1.0)
-                status_text.text("✅ Training completed!")
+            som.train(features, epochs=epochs, progress_callback=update_progress)
 
-                # Map data to SOM
-                mapped_data = som.map_data(features)
+            progress_bar.progress(1.0)
+            status_text.text("✅ Training completed!")
 
-                # Store results in session state
-                st.session_state.som = som
-                st.session_state.mapped_data = mapped_data
-                st.session_state.working_data = working_data
-                st.session_state.features_df = features_df
-                st.session_state.features = features
+            # Map data to SOM
+            mapped_data = som.map_data(features)
+
+            # Store results in session state
+            st.session_state.som = som
+            st.session_state.mapped_data = mapped_data
+            st.session_state.working_data = working_data
+            st.session_state.features_df = features_df
+            st.session_state.features = features
 
     # Display results if available
     if hasattr(st.session_state, 'som'):
@@ -472,7 +481,10 @@ def main():
             )
 
     else:
-        st.info("👆 Please upload a JSON dataset and train the SOM to see visualizations.")
+        if not hasattr(st.session_state, 'emails_data'):
+            st.info("👆 Please click 'Load Data' to load the JSON file and then train the SOM to see visualizations.")
+        else:
+            st.info("👆 Please configure SOM parameters and click 'Train SOM' to see visualizations.")
 
         # Show example JSON format
         with st.expander("📋 Expected JSON Format Examples", expanded=False):
