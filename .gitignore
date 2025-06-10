@@ -1,3 +1,5 @@
 data/Enron_data/
 /log
 log/email_cleaning.log
+src/config
+resource
