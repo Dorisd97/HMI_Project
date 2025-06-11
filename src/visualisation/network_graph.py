@@ -13,6 +13,13 @@ If you encounter WebSocket errors, try:
 Author: Assistant
 """
 
+import os
+os.environ['TRANSFORMERS_CACHE'] = "E:/.cache"
+os.environ['HF_HOME'] = "E:/.cache"
+
+from sklearn.preprocessing import StandardScaler
+from sentence_transformers import SentenceTransformer
+import hdbscan
 import streamlit as st
 import json
 import pandas as pd
@@ -34,6 +41,63 @@ from sklearn.metrics.pairwise import cosine_similarity
 from streamlit_agraph import agraph, Node, Edge, Config
 
 from src.config.config import PROCESSED_JSON_OUTPUT
+
+
+# All other configurations and constants like st.set_page_config, TOPIC_COLORS, etc. remain the same
+# We'll update your show_topic_clustering() and fit_topic_model() replacement here
+
+@st.cache_data(hash_funcs={pd.DataFrame: lambda _: None})
+def fit_transformer_topic_model(corpus):
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    embeddings = model.encode(corpus, show_progress_bar=True)
+    scaler = StandardScaler()
+    embeddings_scaled = scaler.fit_transform(embeddings)
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=15, metric='euclidean', prediction_data=True)
+    cluster_labels = clusterer.fit_predict(embeddings_scaled)
+    return cluster_labels, embeddings, clusterer
+
+@st.cache_data
+def extract_keywords_by_cluster(df, n_top=8):
+    cluster_texts = df.groupby('topic_id')['classification'].apply(lambda texts: ' '.join(texts))
+    vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+    X = vectorizer.fit_transform(cluster_texts)
+    keywords = []
+    for row in X.toarray():
+        top_idxs = row.argsort()[-n_top:][::-1]
+        keywords.append([vectorizer.get_feature_names_out()[i] for i in top_idxs])
+    return keywords
+
+def show_topic_clustering(df):
+    st.header("1️⃣ Transformer-Based Topic Clustering")
+    df = process_to_list(df)
+
+    with st.spinner("Encoding and clustering topics..."):
+        corpus = (df['classification'].fillna('') + ' ' +
+                  df['subject'].fillna('') + ' ' +
+                  df['summary'].fillna(''))
+        cluster_labels, embeddings, clusterer = fit_transformer_topic_model(corpus)
+        df['topic_id'] = cluster_labels
+        df = df[df['topic_id'] != -1]  # Filter noise
+        df['topic_weight'] = 1.0
+        topics = extract_keywords_by_cluster(df)
+
+    n_topics = len(topics)
+    st.subheader("Topic Keywords")
+    cols = st.columns(min(n_topics, 6))
+    for t, col in enumerate(cols * (n_topics // len(cols) + 1)):
+        if t >= n_topics:
+            break
+        color = TOPIC_COLORS[t % len(TOPIC_COLORS)]
+        col.markdown(f"<div style='background-color: {color}; padding: 10px; border-radius: 5px;'>"
+                     f"<strong style='color:white;'>Topic {t}</strong><br>"
+                     f"<span style='color:white;'>{', '.join(topics[t])}</span></div>", unsafe_allow_html=True)
+
+    st.subheader("Emails per Topic")
+    st.bar_chart(df['topic_id'].value_counts().sort_index())
+    return df, topics
+
+# Keep rest of your code: show_comm_network, main(), etc. unchanged
+# Only replace the old NMF-based fit_topic_model and show_topic_clustering
 
 st.set_page_config(
     page_title="Enron Email Explorer",
@@ -154,52 +218,52 @@ def build_comm_graph_optimized(_df):
 
     return G
 
-def show_topic_clustering(df):
-    st.header("1️⃣ Topic Clustering")
-
-    # Ensure to_list is processed
-    df = process_to_list(df)
-
-    # Sidebar controls
-    n_topics = st.sidebar.slider("Number of Topics", 3, 10, 5)
-
-    with st.spinner("Processing topic clustering..."):
-        # Build corpus efficiently
-        corpus = (df['classification'].fillna('') + ' ' +
-                 df['subject'].fillna('') + ' ' +
-                 df['summary'].fillna(''))
-
-        # Fit topic model
-        tfidf, nmf, W, H = fit_topic_model(corpus, n_topics)
-
-        # Extract topics
-        feature_names = tfidf.get_feature_names_out()
-        top_n = 8
-        topics = []
-        for t in range(n_topics):
-            idxs = H[t].argsort()[::-1][:top_n]
-            topics.append([feature_names[i] for i in idxs])
-
-        # Assign topics to emails
-        df['topic_id'] = W.argmax(axis=1)
-        df['topic_weight'] = W.max(axis=1)
-
-    # Show topic keywords with colors
-    st.subheader("Topic Keywords")
-    cols = st.columns(n_topics)
-    for t, col in enumerate(cols):
-        color = TOPIC_COLORS[t % len(TOPIC_COLORS)]
-        col.markdown(f"<div style='background-color: {color}; padding: 10px; border-radius: 5px; margin: 5px;'>"
-                    f"<strong style='color: white;'>Topic {t}</strong><br>"
-                    f"<span style='color: white; font-size: 0.9em;'>{', '.join(topics[t])}</span>"
-                    f"</div>", unsafe_allow_html=True)
-
-    # Topic distribution
-    counts = df['topic_id'].value_counts().sort_index()
-    st.subheader("Emails per Topic")
-    st.bar_chart(counts)
-
-    return df, topics
+# def show_topic_clustering(df):
+#     st.header("1️⃣ Topic Clustering")
+#
+#     # Ensure to_list is processed
+#     df = process_to_list(df)
+#
+#     # Sidebar controls
+#     n_topics = st.sidebar.slider("Number of Topics", 3, 10, 5)
+#
+#     with st.spinner("Processing topic clustering..."):
+#         # Build corpus efficiently
+#         corpus = (df['classification'].fillna('') + ' ' +
+#                  df['subject'].fillna('') + ' ' +
+#                  df['summary'].fillna(''))
+#
+#         # Fit topic model
+#         tfidf, nmf, W, H = fit_topic_model(corpus, n_topics)
+#
+#         # Extract topics
+#         feature_names = tfidf.get_feature_names_out()
+#         top_n = 8
+#         topics = []
+#         for t in range(n_topics):
+#             idxs = H[t].argsort()[::-1][:top_n]
+#             topics.append([feature_names[i] for i in idxs])
+#
+#         # Assign topics to emails
+#         df['topic_id'] = W.argmax(axis=1)
+#         df['topic_weight'] = W.max(axis=1)
+#
+#     # Show topic keywords with colors
+#     st.subheader("Topic Keywords")
+#     cols = st.columns(n_topics)
+#     for t, col in enumerate(cols):
+#         color = TOPIC_COLORS[t % len(TOPIC_COLORS)]
+#         col.markdown(f"<div style='background-color: {color}; padding: 10px; border-radius: 5px; margin: 5px;'>"
+#                     f"<strong style='color: white;'>Topic {t}</strong><br>"
+#                     f"<span style='color: white; font-size: 0.9em;'>{', '.join(topics[t])}</span>"
+#                     f"</div>", unsafe_allow_html=True)
+#
+#     # Topic distribution
+#     counts = df['topic_id'].value_counts().sort_index()
+#     st.subheader("Emails per Topic")
+#     st.bar_chart(counts)
+#
+#     return df, topics
 
 def create_clustered_positions(nodes_by_topic, n_topics, G):
     """Create well-spaced clustered positions for nodes based on their topics"""
