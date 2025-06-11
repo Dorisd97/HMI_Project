@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import pandas as pd
 import numpy as np
+import re
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
@@ -36,6 +37,29 @@ def vectorize(texts: pd.Series) -> np.ndarray:
     )
     return vec.fit_transform(texts).toarray()
 
+@st.cache_data
+def generate_summary(text: str, sentence_count: int) -> str:
+    """
+    Try extractive summary via Sumy LexRank; fallback to naive first-N sentences.
+    """
+    try:
+        from sumy.parsers.plaintext import PlaintextParser
+        from sumy.nlp.tokenizers import Tokenizer
+        from sumy.summarizers.lex_rank import LexRankSummarizer
+        parser = PlaintextParser.from_string(text, Tokenizer("english"))
+        summarizer = LexRankSummarizer()
+        sentences = summarizer(parser.document, sentence_count)
+        if sentences:
+            return " ".join(str(s) for s in sentences)
+    except Exception:
+        pass
+    # Fallback: simple split on sentence boundaries
+    sents = re.split(r'(?<=[.!?])\s+', text.strip())
+    if not sents:
+        return "Not enough content to generate a summary."
+    return " ".join(sents[:sentence_count])
+
+
 def find_best_k(features: np.ndarray, k_min=2, k_max=10) -> int:
     scores = []
     Ks = list(range(k_min, k_max + 1))
@@ -43,20 +67,19 @@ def find_best_k(features: np.ndarray, k_min=2, k_max=10) -> int:
         km = KMeans(n_clusters=k, random_state=42, n_init=10)
         labels = km.fit_predict(features)
         scores.append(silhouette_score(features, labels))
-    # Plot silhouette vs. k
     fig, ax = plt.subplots()
     ax.plot(Ks, scores, marker='o')
     ax.set_xlabel('Number of clusters k')
     ax.set_ylabel('Silhouette Score')
     ax.set_title('Selecting k via Silhouette')
     st.pyplot(fig)
-    # Return the k with the highest score
-    best_k = Ks[int(np.argmax(scores))]
-    return best_k
+    return Ks[int(np.argmax(scores))]
+
 
 def run_kmeans(features: np.ndarray, k: int) -> np.ndarray:
     km = KMeans(n_clusters=k, random_state=42, n_init=10)
     return km.fit_predict(features)
+
 
 def plot_clusters_2d(features: np.ndarray, labels: np.ndarray):
     pca = PCA(n_components=2, random_state=42)
@@ -71,38 +94,48 @@ def plot_clusters_2d(features: np.ndarray, labels: np.ndarray):
 # --- Streamlit app ---
 
 def main():
-    st.set_page_config(page_title="Subject+Summary Clustering", layout="wide")
-    st.title("📧 Cluster on Subject & Summary Only")
+    st.set_page_config(page_title="Subject+Summary Clustering & Storytelling", layout="wide")
+    st.title("📧 Cluster on Subject & Summary + Generate Cluster Summaries")
+
+    # Sidebar controls
+    st.sidebar.header("Configuration")
+    summary_sentences = st.sidebar.slider(
+        "Sentences per cluster summary (fallback if extractive fails)",
+        min_value=1,
+        max_value=10,
+        value=3,
+        help="Number of sentences in each cluster's summary"
+    )
+    k_manual = st.sidebar.checkbox("Pick k manually", value=False)
+    if k_manual:
+        manual_k = st.sidebar.slider("Number of clusters", 2, 20, 5)
+    else:
+        manual_k = None
 
     uploaded = st.file_uploader("Upload your JSON file", type="json")
     if not uploaded:
         st.info("Please upload a JSON file containing `subject` and `summary` fields.")
         st.stop()
 
-    # Read uploaded file as bytes and pass to our loader
     raw_bytes = uploaded.read()
     df = load_subject_summary(raw_bytes)
-    st.write(f"Loaded {len(df)} emails.")
+    st.write(f"Loaded **{len(df)}** emails.")
 
-    # Vectorize text
     with st.spinner("Vectorizing text…"):
         X = vectorize(df['text'])
 
-    # Choose k
-    k_manual = st.checkbox("Pick k manually", value=False)
-    if k_manual:
-        k = st.slider("Number of clusters", 2, 20, 5)
+    if manual_k:
+        k = manual_k
     else:
-        st.write("Finding best k automatically…")
+        st.info("Finding best k automatically…")
         k = find_best_k(X, k_min=2, k_max=12)
-        st.success(f"→ Best k = {k}")
+        st.success(f"→ Best k = **{k}**")
 
-    # Run K-Means
     labels = run_kmeans(X, k)
     df['cluster'] = labels
 
     # Display cluster sizes
-    st.subheader("Cluster sizes")
+    st.subheader("Cluster Sizes")
     size_df = (
         df['cluster']
         .value_counts()
@@ -113,14 +146,23 @@ def main():
     st.bar_chart(size_df.set_index('cluster'))
 
     # 2D PCA scatter
-    st.subheader("2D PCA plot")
+    st.subheader("2D PCA Plot of Clusters")
     plot_clusters_2d(X, labels)
 
-    # Sample assignments table
-    st.subheader("Sample of cluster assignments")
-    st.dataframe(df[['cluster','subject','summary']].head(10), use_container_width=True)
+    # Sample assignments
+    st.subheader("Sample Cluster Assignments")
+    st.dataframe(df[['cluster', 'subject', 'summary']].head(10), use_container_width=True)
 
-    # Download full results
+    # Generate and display summaries for each cluster
+    st.header("📖 Cluster Summaries")
+    for cluster_id in sorted(df['cluster'].unique()):
+        texts = df[df['cluster'] == cluster_id]['text'].tolist()
+        combined = " ".join(texts)
+        summary = generate_summary(combined, sentence_count=summary_sentences)
+        st.subheader(f"Cluster {cluster_id} Summary")
+        st.write(summary)
+
+    # Download results
     st.download_button(
         "Download full assignments as CSV",
         df.to_csv(index=False),
