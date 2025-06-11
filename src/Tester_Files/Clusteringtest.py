@@ -5,6 +5,8 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.decomposition import LatentDirichletAllocation, PCA
+from sklearn.manifold import TSNE
+import umap
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 from sklearn.preprocessing import StandardScaler
 from collections import Counter, defaultdict
@@ -271,9 +273,131 @@ class EmailTopicClusterer:
         self.clustering_results['hybrid'] = result
         return result
 
+    def create_cluster_visualization_data(self, method: str, reduction_method: str = 'pca') -> Dict[str, Any]:
+        """Create 2D visualization data for clusters using dimensionality reduction"""
+        if method not in self.clustering_results:
+            return None
 
-def create_plotly_cluster_visualization(clusterer, method):
-    """Create interactive Plotly visualizations"""
+        result = self.clustering_results[method]
+        labels = result['labels']
+
+        # Get the appropriate features for the method
+        if method == 'text_based':
+            features = self.prepare_text_features()
+        elif method == 'entity_based':
+            features = self.prepare_entity_features()
+        elif method == 'hybrid':
+            text_features = self.prepare_text_features()
+            entity_features = self.prepare_entity_features()
+            scaler_text = StandardScaler()
+            scaler_entity = StandardScaler()
+            text_features_norm = scaler_text.fit_transform(text_features)
+            entity_features_norm = scaler_entity.fit_transform(entity_features)
+            features = np.hstack([text_features_norm * 0.7, entity_features_norm * 0.3])
+        else:  # LDA
+            features = self.prepare_text_features()
+
+        # Apply dimensionality reduction
+        if reduction_method == 'pca':
+            reducer = PCA(n_components=2, random_state=42)
+            coords_2d = reducer.fit_transform(features)
+            explained_variance = reducer.explained_variance_ratio_
+        elif reduction_method == 'tsne':
+            reducer = TSNE(n_components=2, random_state=42, perplexity=min(30, len(features) - 1))
+            coords_2d = reducer.fit_transform(features)
+            explained_variance = None
+        else:  # umap
+            reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=min(15, len(features) - 1))
+            coords_2d = reducer.fit_transform(features)
+            explained_variance = None
+
+        # Create DataFrame for plotting
+        plot_data = pd.DataFrame({
+            'x': coords_2d[:, 0],
+            'y': coords_2d[:, 1],
+            'cluster': labels,
+            'email_id': [email['email_id'] for email in self.emails],
+            'subject': [email['subject'][:50] + "..." if len(email['subject']) > 50
+                        else email['subject'] for email in self.emails],
+            'from': [email['from'] for email in self.emails],
+            'to': [email['to'] for email in self.emails],
+            'classification': [email.get('classification', 'Unknown') for email in self.emails]
+        })
+
+        return {
+            'plot_data': plot_data,
+            'explained_variance': explained_variance,
+            'reduction_method': reduction_method,
+            'n_clusters': result.get('n_clusters', result.get('n_topics', len(set(labels))))
+        }
+
+
+def create_cluster_scatter_plot(clusterer, method, reduction_method='pca'):
+    """Create interactive scatter plot of clusters"""
+    viz_data = clusterer.create_cluster_visualization_data(method, reduction_method)
+
+    if viz_data is None:
+        return None
+
+    plot_data = viz_data['plot_data']
+
+    # Create color palette for clusters
+    n_clusters = viz_data['n_clusters']
+    colors = px.colors.qualitative.Set3[:n_clusters] if n_clusters <= len(
+        px.colors.qualitative.Set3) else px.colors.qualitative.Plotly
+
+    # Create the scatter plot
+    fig = px.scatter(
+        plot_data,
+        x='x',
+        y='y',
+        color='cluster',
+        hover_data=['email_id', 'subject', 'from', 'classification'],
+        title=f'{method.replace("_", " ").title()} Clusters ({reduction_method.upper()} Visualization)',
+        labels={
+            'x': f'{reduction_method.upper()} Component 1',
+            'y': f'{reduction_method.upper()} Component 2',
+            'cluster': 'Cluster'
+        },
+        color_discrete_sequence=colors
+    )
+
+    # Update layout for better visualization
+    fig.update_traces(
+        marker=dict(size=8, opacity=0.7, line=dict(width=1, color='white')),
+        hovertemplate='<b>%{hovertext}</b><br>' +
+                      'Cluster: %{marker.color}<br>' +
+                      'Email ID: %{customdata[0]}<br>' +
+                      'Subject: %{customdata[1]}<br>' +
+                      'From: %{customdata[2]}<br>' +
+                      'Classification: %{customdata[3]}<extra></extra>',
+        hovertext=plot_data['subject']
+    )
+
+    fig.update_layout(
+        width=800,
+        height=600,
+        title_x=0.5,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        )
+    )
+
+    # Add explained variance to title if PCA
+    if viz_data['explained_variance'] is not None:
+        explained_var_text = f" (Explained Variance: {viz_data['explained_variance'][0]:.2%}, {viz_data['explained_variance'][1]:.2%})"
+        fig.update_layout(title=fig.layout.title.text + explained_var_text)
+
+    return fig
+
+
+def create_cluster_summary_plots(clusterer, method):
+    """Create summary plots for cluster analysis"""
     if method not in clusterer.clustering_results:
         return None
 
@@ -283,57 +407,124 @@ def create_plotly_cluster_visualization(clusterer, method):
     # Create subplots
     fig = make_subplots(
         rows=2, cols=2,
-        subplot_titles=('Cluster Size Distribution', 'Classification Distribution',
-                        'Silhouette Score Comparison', 'Email Timeline'),
+        subplot_titles=('Cluster Size Distribution', 'Classification by Cluster',
+                        'Sender Distribution (Top 10)', 'Timeline Distribution'),
         specs=[[{"type": "bar"}, {"type": "bar"}],
                [{"type": "bar"}, {"type": "scatter"}]]
     )
 
-    # Cluster size distribution
+    # 1. Cluster size distribution
     cluster_sizes = Counter(labels)
     fig.add_trace(
-        go.Bar(x=list(cluster_sizes.keys()), y=list(cluster_sizes.values()),
-               name='Cluster Sizes', marker_color='lightblue'),
+        go.Bar(
+            x=list(cluster_sizes.keys()),
+            y=list(cluster_sizes.values()),
+            name='Cluster Sizes',
+            marker_color='lightblue',
+            text=list(cluster_sizes.values()),
+            textposition='auto'
+        ),
         row=1, col=1
     )
 
-    # Classification distribution
-    classifications = Counter([email.get('classification', 'Unknown') for email in clusterer.emails])
-    fig.add_trace(
-        go.Bar(x=list(classifications.keys()), y=list(classifications.values()),
-               name='Classifications', marker_color='lightgreen'),
-        row=1, col=2
-    )
+    # 2. Classification distribution by cluster
+    cluster_classifications = defaultdict(Counter)
+    for idx, label in enumerate(labels):
+        classification = clusterer.emails[idx].get('classification', 'Unknown')
+        cluster_classifications[label][classification] += 1
 
-    # Silhouette scores comparison
-    methods_with_scores = {k: v.get('silhouette_score', 0)
-                           for k, v in clusterer.clustering_results.items()
-                           if 'silhouette_score' in v}
-    if methods_with_scores:
+    # Get all unique classifications
+    all_classifications = set()
+    for cluster_data in cluster_classifications.values():
+        all_classifications.update(cluster_data.keys())
+
+    # Create stacked bar for classifications
+    for i, classification in enumerate(all_classifications):
+        cluster_ids = sorted(cluster_classifications.keys())
+        heights = [cluster_classifications[cluster][classification] for cluster in cluster_ids]
+
         fig.add_trace(
-            go.Bar(x=list(methods_with_scores.keys()), y=list(methods_with_scores.values()),
-                   name='Silhouette Scores', marker_color='coral'),
-            row=2, col=1
+            go.Bar(
+                x=cluster_ids,
+                y=heights,
+                name=classification[:15] + "..." if len(classification) > 15 else classification,
+                legendgroup="classifications"
+            ),
+            row=1, col=2
         )
 
-    # Email timeline (if dates are available)
+    # 3. Top senders distribution
+    senders = [email.get('from', 'Unknown') for email in clusterer.emails]
+    sender_counts = Counter(senders).most_common(10)
+
+    fig.add_trace(
+        go.Bar(
+            x=[sender[1] for sender in sender_counts],
+            y=[sender[0].split('@')[0] if '@' in sender[0] else sender[0] for sender in sender_counts],
+            orientation='h',
+            name='Top Senders',
+            marker_color='lightgreen'
+        ),
+        row=2, col=1
+    )
+
+    # 4. Email timeline
     try:
         dates = [email.get('date', '') for email in clusterer.emails]
         dates_parsed = pd.to_datetime(dates, format='%d.%m.%Y %H:%M:%S', errors='coerce')
         valid_dates = dates_parsed.dropna()
 
         if len(valid_dates) > 0:
-            date_counts = valid_dates.value_counts().sort_index()
+            # Group by month for better visualization
+            monthly_counts = valid_dates.dt.to_period('M').value_counts().sort_index()
+
             fig.add_trace(
-                go.Scatter(x=date_counts.index, y=date_counts.values,
-                           mode='lines+markers', name='Email Timeline',
-                           line=dict(color='purple')),
+                go.Scatter(
+                    x=[str(period) for period in monthly_counts.index],
+                    y=monthly_counts.values,
+                    mode='lines+markers',
+                    name='Monthly Email Count',
+                    line=dict(color='purple', width=3),
+                    marker=dict(size=6)
+                ),
                 row=2, col=2
             )
-    except:
-        pass
+    except Exception as e:
+        # If date parsing fails, show a simple message
+        fig.add_annotation(
+            text="Date parsing failed",
+            xref="x4", yref="y4",
+            x=0.5, y=0.5,
+            showarrow=False,
+            row=2, col=2
+        )
 
-    fig.update_layout(height=800, showlegend=False, title_text=f"Clustering Analysis - {method.title()}")
+    fig.update_layout(
+        height=800,
+        showlegend=True,
+        title_text=f"Cluster Analysis Summary - {method.replace('_', ' ').title()}",
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        )
+    )
+
+    # Update axes labels
+    fig.update_xaxes(title_text="Cluster ID", row=1, col=1)
+    fig.update_yaxes(title_text="Number of Emails", row=1, col=1)
+
+    fig.update_xaxes(title_text="Cluster ID", row=1, col=2)
+    fig.update_yaxes(title_text="Number of Emails", row=1, col=2)
+
+    fig.update_xaxes(title_text="Email Count", row=2, col=1)
+    fig.update_yaxes(title_text="Sender", row=2, col=1)
+
+    fig.update_xaxes(title_text="Time Period", row=2, col=2)
+    fig.update_yaxes(title_text="Email Count", row=2, col=2)
+
     return fig
 
 
@@ -466,54 +657,92 @@ def main():
             st.subheader(f"📊 {method.replace('_', ' ').title()} Results")
 
             # Create tabs for different views
-            tab1, tab2, tab3 = st.tabs(["Visualizations", "Cluster Details", "Sample Emails"])
+            tab1, tab2, tab3, tab4 = st.tabs(["Cluster Plot", "Summary Charts", "Cluster Details", "Sample Emails"])
 
             with tab1:
-                fig = create_plotly_cluster_visualization(clusterer, method)
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                st.subheader("🎯 Interactive Cluster Visualization")
+
+                # Dimensionality reduction method selection
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    reduction_method = st.selectbox(
+                        "Visualization method:",
+                        options=['pca', 'tsne', 'umap'],
+                        index=0,
+                        key=f"reduction_{method}",
+                        help="PCA: Linear, preserves global structure\nT-SNE: Non-linear, preserves local structure\nUMAP: Balance of local and global structure"
+                    )
+
+                # Create and display cluster scatter plot
+                with st.spinner(f"Creating {reduction_method.upper()} visualization..."):
+                    cluster_plot = create_cluster_scatter_plot(clusterer, method, reduction_method)
+                    if cluster_plot:
+                        st.plotly_chart(cluster_plot, use_container_width=True)
+
+                        # Add explanation
+                        st.info(f"""
+                        **How to read this plot:**
+                        - Each point represents one email
+                        - Colors represent different clusters
+                        - Hover over points to see email details
+                        - Points close together are more similar
+                        - {reduction_method.upper()} reduces high-dimensional data to 2D for visualization
+                        """)
+                    else:
+                        st.error("Could not create cluster visualization")
 
             with tab2:
+                st.subheader("📈 Summary Analysis")
+                summary_plot = create_cluster_summary_plots(clusterer, method)
+                if summary_plot:
+                    st.plotly_chart(summary_plot, use_container_width=True)
+
+            with tab3:
+                st.subheader("🏷️ Cluster Characteristics")
                 result = clusterer.clustering_results[method]
 
                 if 'cluster_topics' in result:
-                    st.write("**Top terms per cluster:**")
+                    st.write("**🔤 Top terms per cluster:**")
                     for cluster_id, topics in result['cluster_topics'].items():
-                        st.write(f"**Cluster {cluster_id}:** {', '.join(topics[:5])}")
+                        with st.expander(f"Cluster {cluster_id} - Top Terms"):
+                            st.write(", ".join(topics))
 
                 elif 'cluster_entities' in result:
-                    st.write("**Top entities per cluster:**")
+                    st.write("**🏢 Top entities per cluster:**")
                     for cluster_id, entities in result['cluster_entities'].items():
                         if entities:
-                            st.write(f"**Cluster {cluster_id}:** {', '.join(entities[:5])}")
+                            with st.expander(f"Cluster {cluster_id} - Top Entities"):
+                                st.write(", ".join(entities))
 
                 elif 'topics' in result:
-                    st.write("**LDA Topics:**")
+                    st.write("**📝 LDA Topics:**")
                     for topic_id, words in result['topics'].items():
-                        st.write(f"**Topic {topic_id}:** {', '.join(words[:5])}")
+                        with st.expander(f"Topic {topic_id}"):
+                            st.write(", ".join(words))
 
-            with tab3:
+            with tab4:
+                st.subheader("📧 Sample Emails by Cluster")
                 # Show sample emails for each cluster
                 labels = result['labels']
                 cluster_samples = defaultdict(list)
 
                 for idx, label in enumerate(labels):
-                    if len(cluster_samples[label]) < 3:  # Limit to 3 samples per cluster
+                    if len(cluster_samples[label]) < 5:  # Limit to 5 samples per cluster
                         cluster_samples[label].append({
                             'Cluster': label,
-                            'Subject': clusterer.emails[idx]['subject'][:80] + "...",
+                            'Email ID': clusterer.emails[idx]['email_id'],
+                            'Subject': clusterer.emails[idx]['subject'],
                             'From': clusterer.emails[idx]['from'],
-                            'Classification': clusterer.emails[idx].get('classification', 'Unknown')
+                            'To': clusterer.emails[idx]['to'],
+                            'Classification': clusterer.emails[idx].get('classification', 'Unknown'),
+                            'Summary': clusterer.emails[idx].get('summary', '')[:200] + "..."
                         })
 
-                # Convert to DataFrame for display
-                samples_data = []
-                for cluster_emails in cluster_samples.values():
-                    samples_data.extend(cluster_emails)
-
-                if samples_data:
-                    samples_df = pd.DataFrame(samples_data)
-                    st.dataframe(samples_df, use_container_width=True)
+                # Display samples by cluster
+                for cluster_id in sorted(cluster_samples.keys()):
+                    with st.expander(f"Cluster {cluster_id} ({Counter(labels)[cluster_id]} emails total)"):
+                        cluster_df = pd.DataFrame(cluster_samples[cluster_id])
+                        st.dataframe(cluster_df, use_container_width=True, hide_index=True)
 
         # Export results
         st.header("💾 Export Results")
