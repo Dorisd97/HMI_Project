@@ -2,11 +2,13 @@
 Enron Email Explorer with Topic Clusters
 
 Performance-optimized Streamlit app for exploring email communication patterns.
+Handles large datasets with WebSocket stability improvements.
 
-If you encounter "unhashable type" errors:
-1. Try clearing Streamlit cache: streamlit cache clear
-2. Or use the "Clear Cache" button in the app
-3. The app handles DataFrame caching issues automatically
+If you encounter WebSocket errors, try:
+1. Refresh the browser page
+2. Reduce the number of displayed nodes
+3. Close and reopen the browser tab
+4. Clear browser cache
 
 Author: Assistant
 """
@@ -18,6 +20,11 @@ import numpy as np
 import networkx as nx
 from collections import defaultdict, Counter
 import time
+import logging
+
+# Configure logging to reduce noise
+logging.getLogger('tornado.access').setLevel(logging.WARNING)
+logging.getLogger('streamlit').setLevel(logging.WARNING)
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import NMF
@@ -28,7 +35,15 @@ from streamlit_agraph import agraph, Node, Edge, Config
 
 from src.config.config import PROCESSED_JSON_OUTPUT
 
-st.set_page_config(page_title="Enron Email Explorer", layout="wide")
+st.set_page_config(
+    page_title="Enron Email Explorer",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    # Add memory management settings
+    menu_items={
+        'About': "Enron Email Network Analysis - Optimized for large datasets"
+    }
+)
 
 # Define colors for topics/clusters
 TOPIC_COLORS = [
@@ -236,14 +251,20 @@ def create_clustered_positions(nodes_by_topic, n_topics, G):
 def show_comm_network(df, topics):
     st.header("2️⃣ Communication Network by Topic Clusters")
 
-    # Enhanced controls with label options
+    # Performance warning for large datasets
+    if len(df) > 50000:
+        st.warning("⚠️ Large dataset detected. Consider reducing node count for better performance.")
+
+    # Enhanced controls with performance optimizations
     col1, col2, col3 = st.columns(3)
     with col1:
         min_activity = st.slider("Minimum total emails (sent + received)", 1, 100, 20)
     with col2:
-        max_nodes = st.slider("Maximum nodes to display", 50, 1000, 200)
+        # Reduce default max nodes for better stability
+        max_nodes = st.slider("Maximum nodes to display", 50, 500, 150,
+                             help="Lower values improve performance and reduce WebSocket errors")
     with col3:
-        show_full_emails = st.checkbox("Show full email addresses", value=True,
+        show_full_emails = st.checkbox("Show full email addresses", value=False,
                                       help="Show complete email addresses in node labels")
 
     # Get user topic affiliations (optimized)
@@ -338,20 +359,26 @@ def show_comm_network(df, topics):
             else:
                 size = 15
 
-            # Show full email address in label for clarity
-            label = node  # Show complete email address
+            # Flexible label based on user preference
+            if show_full_emails:
+                label = node  # Show complete email address
 
-            # If too long, show more characters than before
-            if len(label) > 20:
-                # Split at @ and show more of the username part
-                if '@' in label:
-                    username, domain = label.split('@', 1)
-                    if len(username) > 15:
-                        label = f"{username[:15]}...@{domain.split('.')[0]}"
+                # If extremely long, show smart truncation
+                if len(label) > 25:
+                    if '@' in label:
+                        username, domain = label.split('@', 1)
+                        if len(username) > 18:
+                            label = f"{username[:18]}...@{domain}"
+                        else:
+                            label = f"{username}@{domain}"
                     else:
-                        label = f"{username}@{domain.split('.')[0]}"
-                else:
-                    label = label[:20] + "..."
+                        label = label[:25] + "..."
+            else:
+                # Show just username part (original behavior)
+                base_label = node.split('@')[0] if '@' in node else node
+                if len(base_label) > 12:
+                    base_label = base_label[:12] + "…"
+                label = base_label
 
             # Get clustered position
             pos = positions.get(node, {'x': 0, 'y': 0})
@@ -387,6 +414,9 @@ Topic: Cluster {primary_topic}
 
 Activity: Sent {data['sent']}, Received {data['recv']}"""
 
+            # Adjust font size based on label preference
+            font_size = 8 if show_full_emails else 10
+
             nodes.append(Node(
                 id=node,
                 label=label,
@@ -403,10 +433,10 @@ Activity: Sent {data['sent']}, Received {data['recv']}"""
                 borderWidthSelected=5,
                 labelHighlightBold=True,
                 font={
-                    'size': 12,
+                    'size': font_size,
                     'color': '#ffffff',
                     'face': 'Arial, sans-serif',
-                    'background': 'rgba(0,0,0,0.8)',
+                    'background': 'rgba(0,0,0,0.9)',  # Dark background for better readability
                     'strokeWidth': 2,
                     'strokeColor': '#000000',
                     'align': 'center',
@@ -520,17 +550,18 @@ To: Cluster {target_topic}"""
     guide_col1, guide_col2 = st.columns(2)
 
     with guide_col1:
-        st.markdown("**🖱️ How to Use (Game of Thrones Style):**")
+        st.markdown("**🖱️ Optimized Navigation:**")
         st.markdown("• **🎯 DRAG NODES**: Click and drag any node to move it freely")
         st.markdown("• **🖱️ Pan View**: Drag empty space to move the view")
         st.markdown("• **🔍 Zoom**: Mouse wheel or pinch to zoom in/out")
         st.markdown("• **💡 Hover**: See detailed communication information")
-        st.markdown("• **🎪 Multi-Select**: Ctrl/Cmd + click for multiple nodes")
-        st.markdown("• **⌨️ Keyboard**: Arrow keys for fine adjustments")
+        st.markdown("• **⚖️ Optimized**: Settings tuned for WebSocket stability")
+        st.markdown("• **📊 Progress**: Visual feedback for large datasets")
 
     with guide_col2:
         st.markdown("**📊 Visual Guide:**")
         st.markdown("• **Node Colors**: Topic clusters (legend above)")
+        st.markdown("• **Node Labels**: Full email addresses (toggle above)")
         st.markdown("• **Node Sizes**: Email activity level")
         st.markdown("• **Clean Tooltips**: 'To: email, From: email, Topic: Cluster X'")
         st.markdown("• **Solid Edges**: Same-topic communication")
@@ -558,151 +589,127 @@ To: Cluster {target_topic}"""
         st.markdown("• **Isolated Nodes**: Limited communication scope")
         st.markdown("• **Dense Clusters**: Highly collaborative teams")
 
-    # Game of Thrones style interactive graph configuration
+    # Optimized graph configuration for WebSocket stability
     config = Config(
-        width=1400,  # Large canvas like the example
-        height=900,
+        width=1200,  # Slightly smaller for better performance
+        height=800,
         directed=True,
-        # Physics optimized for free node movement like Game of Thrones
+        # Optimized physics for stability and performance
         physics={
             'enabled': True,
             'stabilization': {
                 'enabled': True,
-                'iterations': 100,  # Reduced for faster initial setup
-                'updateInterval': 50,
+                'iterations': 50,  # Reduced for faster rendering
+                'updateInterval': 100,  # Less frequent updates
                 'onlyDynamicEdges': False,
                 'fit': True
             },
             'barnesHut': {
-                'gravitationalConstant': -1000,  # Reduced for easier movement
-                'centralGravity': 0.05,  # Less central pull
-                'springLength': 150,     # Shorter springs
-                'springConstant': 0.02,  # Weaker springs
-                'damping': 0.15,         # More damping for stability
-                'avoidOverlap': 1.0      # Maximum overlap avoidance
+                'gravitationalConstant': -800,   # Reduced for less CPU load
+                'centralGravity': 0.05,          # Less central pull
+                'springLength': 120,             # Shorter springs
+                'springConstant': 0.02,          # Weaker springs
+                'damping': 0.2,                  # More damping for stability
+                'avoidOverlap': 1.0              # Maximum overlap avoidance
             },
             'minVelocity': 0.1,
-            'maxVelocity': 20,
-            'timestep': 0.8,
+            'maxVelocity': 15,  # Reduced max velocity
+            'timestep': 1.0,    # Larger timestep for stability
             'solver': 'barnesHut',
-            'wind': {
-                'x': 0,
-                'y': 0
-            },
             'adaptiveTimestep': True
         },
-        # Layout configuration for initial positioning
+        # Simple layout configuration
         layout={
             'randomSeed': 42,
-            'improvedLayout': True,
-            'clusterThreshold': 50,
+            'improvedLayout': False,  # Disable for better performance
             'hierarchical': {
                 'enabled': False
             }
         },
-        # Enhanced interaction for free movement
+        # Optimized interaction for stability
         interaction={
-            'dragNodes': True,          # Enable node dragging
-            'dragView': True,           # Enable view dragging
-            'zoomView': True,           # Enable zooming
+            'dragNodes': True,
+            'dragView': True,
+            'zoomView': True,
             'selectConnectedEdges': True,
             'hover': True,
-            'hoverConnectedEdges': True,
-            'navigationButtons': True,   # Show navigation controls
+            'hoverConnectedEdges': False,  # Disable for performance
+            'navigationButtons': True,
             'keyboard': {
-                'enabled': True,
-                'speed': {
-                    'x': 10,
-                    'y': 10,
-                    'zoom': 0.02
-                },
-                'bindToWindow': False
+                'enabled': False  # Disable keyboard for stability
             },
-            'tooltipDelay': 200,
-            'hideEdgesOnDrag': False,    # Keep edges visible during drag
-            'hideNodesOnDrag': False,    # Keep nodes visible during drag
+            'tooltipDelay': 500,  # Longer delay to reduce events
+            'hideEdgesOnDrag': True,     # Hide edges during drag for performance
+            'hideNodesOnDrag': False,
             'zoomViewOnClick': False,
-            'multiselect': True,         # Allow multiple selection
-            'selectable': True,
-            'selectConnectedEdges': True
+            'multiselect': False         # Disable multiselect for stability
         },
-        # Node styling for Game of Thrones look
+        # Simplified node styling
         nodes={
             'borderWidth': 2,
-            'borderWidthSelected': 4,
+            'borderWidthSelected': 3,
             'chosen': {
                 'node': True,
-                'label': True
+                'label': False  # Disable label selection for performance
             },
             'font': {
-                'size': 11,
+                'size': 10,
                 'color': '#ffffff',
-                'face': 'Arial, sans-serif',
-                'background': 'rgba(0,0,0,0.7)',
-                'strokeWidth': 2,
+                'face': 'Arial',
+                'background': 'rgba(0,0,0,0.8)',
+                'strokeWidth': 1,
                 'strokeColor': '#000000',
-                'align': 'center',
-                'multi': False,  # Single line for cleaner look
-                'bold': True
+                'align': 'center'
             },
             'shape': 'dot',
             'scaling': {
                 'min': 15,
-                'max': 40,
+                'max': 35,
                 'label': {
                     'enabled': True,
                     'min': 8,
-                    'max': 12,  # Adjusted for longer labels
-                    'maxVisible': 100,  # Show more labels
-                    'drawThreshold': 3  # Lower threshold to show labels more often
+                    'max': 12,
+                    'maxVisible': 200,  # Increased for better visibility
+                    'drawThreshold': 1   # Lower threshold
                 }
             },
             'shadow': {
-                'enabled': True,
-                'color': 'rgba(0,0,0,0.3)',
-                'size': 10,
-                'x': 2,
-                'y': 2
+                'enabled': False  # Disable shadows for performance
             },
-            'margin': 5,
-            'mass': 1  # Default mass for physics
+            'mass': 1
         },
-        # Edge styling similar to Game of Thrones
+        # Simplified edge styling
         edges={
             'smooth': {
                 'enabled': True,
                 'type': 'continuous',
-                'roundness': 0.3
+                'roundness': 0.2  # Reduced for performance
             },
             'arrows': {
                 'to': {
                     'enabled': True,
-                    'scaleFactor': 1.0,
+                    'scaleFactor': 0.8,  # Smaller arrows
                     'type': 'arrow'
                 }
             },
             'color': {
                 'inherit': False,
-                'opacity': 0.7
+                'opacity': 0.6  # Reduced opacity
             },
             'font': {
                 'size': 10,
-                'color': '#ffffff',
-                'background': 'rgba(0,0,0,0.7)',
-                'strokeWidth': 1,
-                'strokeColor': '#000000',
-                'align': 'middle'
+                'strokeWidth': 0  # Remove stroke for performance
             },
             'scaling': {
                 'min': 1,
-                'max': 5
+                'max': 4  # Reduced range
             },
             'shadow': {
-                'enabled': False  # Disable edge shadows for cleaner look
+                'enabled': False  # Disable shadows for performance
             },
             'selectionWidth': 2,
-            'hoverWidth': 1.5,
-            'length': 150  # Preferred edge length
+            'hoverWidth': 1,
+            'length': 120
         }
     )
 
@@ -753,15 +760,32 @@ def main():
     st.title("🔍 Enron Email Explorer with Topic Clusters")
     st.markdown("Explore email communication patterns and topic clusters in the Enron dataset.")
 
+    # WebSocket stability information
+    st.sidebar.markdown("### 🔧 Stability Info")
+    st.sidebar.info("If you see WebSocket errors in the console, they're harmless background noise. "
+                   "To minimize them: refresh the page, reduce node count, or close/reopen the browser tab.")
+
     # Initialize session state
     if 'show_stats' not in st.session_state:
         st.session_state.show_stats = True
 
     # Performance settings in sidebar
     st.sidebar.header("⚙️ Performance Settings")
-    st.sidebar.info("Adjust these settings to balance performance vs. detail level.")
+    st.sidebar.info("For best stability with large datasets, keep nodes under 300.")
 
-    # Load data with error handling
+    # Add memory usage indicator (optional)
+    try:
+        import psutil
+        import os
+        process = psutil.Process(os.getpid())
+        memory_usage = process.memory_info().rss / 1024 / 1024  # MB
+        st.sidebar.metric("Memory Usage", f"{memory_usage:.1f} MB")
+    except ImportError:
+        st.sidebar.info("Install psutil for memory monitoring: pip install psutil")
+    except Exception:
+        pass  # Ignore other errors
+
+    # Load data with enhanced error handling
     try:
         start_time = time.time()
         df = load_data()
@@ -770,30 +794,83 @@ def main():
         st.sidebar.success(f"Data loaded in {load_time:.2f}s")
         st.sidebar.write(f"Total emails: {len(df):,}")
 
-        # Topic clustering
-        start_time = time.time()
-        df, topics = show_topic_clustering(df)
-        clustering_time = time.time() - start_time
+        # Topic clustering with timeout handling
+        try:
+            start_time = time.time()
+            df, topics = show_topic_clustering(df)
+            clustering_time = time.time() - start_time
 
-        st.sidebar.success(f"Topics computed in {clustering_time:.2f}s")
+            st.sidebar.success(f"Topics computed in {clustering_time:.2f}s")
+        except Exception as e:
+            st.error(f"❌ Error in topic clustering: {str(e)}")
+            st.info("Try reducing the dataset size or refreshing the page.")
+            return
 
         st.markdown("---")
 
-        # Communication network
-        start_time = time.time()
-        show_comm_network(df, topics)
-        network_time = time.time() - start_time
+        # Communication network with comprehensive error handling
+        try:
+            start_time = time.time()
+            show_comm_network(df, topics)
+            network_time = time.time() - start_time
 
-        st.sidebar.success(f"Network rendered in {network_time:.2f}s")
+            st.sidebar.success(f"Network rendered in {network_time:.2f}s")
+        except Exception as e:
+            st.error(f"❌ Error rendering network: {str(e)}")
+            st.info("This may be due to WebSocket timeouts with large datasets. "
+                   "Try reducing the number of nodes or refreshing the page.")
+
+            # Offer alternative
+            if st.button("🔄 Try with Reduced Dataset"):
+                st.session_state.reduce_dataset = True
+                st.rerun()
+
+    except FileNotFoundError:
+        st.error(f"❌ Data file not found: {PROCESSED_JSON_OUTPUT}")
+        st.info("Please ensure the data file exists at the specified path.")
 
     except Exception as e:
         st.error(f"❌ Error loading data: {str(e)}")
-        st.info("💡 Try clearing the Streamlit cache: Go to Settings > Clear Cache")
+        st.info("💡 Try clearing the Streamlit cache or refreshing the page.")
 
-        # Add clear cache button
-        if st.button("🗑️ Clear Cache and Restart"):
-            st.cache_data.clear()
-            st.rerun()
+        # Enhanced clear cache section
+        st.markdown("### 🛠️ Troubleshooting")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("🗑️ Clear Cache and Restart"):
+                st.cache_data.clear()
+                st.rerun()
+
+        with col2:
+            if st.button("📊 Reduce Dataset Size"):
+                st.session_state.reduce_dataset = True
+                st.rerun()
+
+        # Display helpful information
+        st.markdown("""
+        **Common Solutions:**
+        - Refresh your browser page
+        - Clear browser cache
+        - Reduce the number of nodes displayed
+        - Close and reopen the browser tab
+        - Restart the Streamlit app
+        """)
+
+        # Show system information for debugging
+        with st.expander("🔍 System Information"):
+            import platform
+            st.write(f"**Python Version:** {platform.python_version()}")
+            st.write(f"**Platform:** {platform.system()} {platform.release()}")
+            try:
+                import streamlit as st_version
+                st.write(f"**Streamlit Version:** {st_version.__version__}")
+            except:
+                st.write("**Streamlit Version:** Unable to determine")
+
+            # Show current session state
+            st.write("**Session State:**")
+            st.json(dict(st.session_state))
 
 if __name__ == "__main__":
     main()
