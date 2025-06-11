@@ -142,7 +142,7 @@ class EfficientEnronAnalyzer:
                     'organizations': self._get_all_organizations(project_emails_subset),
                     'date_range': (project_emails_subset['date'].min(), project_emails_subset['date'].max()),
                     'duration_days': (project_emails_subset['date'].max() - project_emails_subset['date'].min()).days,
-                    'summary': self._generate_project_summary(project, project_emails_subset),
+                    'summary': self._generate_story_summary(project_emails_subset, context=f"project '{project}'"),
                     'timeline': project_emails_subset[['date', 'from', 'to', 'subject', 'summary']].to_dict('records'),
                     'importance_score': len(email_indices) * 2 + len(
                         self._get_unique_participants(project_emails_subset))
@@ -181,7 +181,7 @@ class EfficientEnronAnalyzer:
                         'organizations': self._get_all_organizations(topic_emails),
                         'date_range': (topic_emails['date'].min(), topic_emails['date'].max()),
                         'duration_days': (topic_emails['date'].max() - topic_emails['date'].min()).days,
-                        'summary': f"Concentrated discussion about '{topic}' involving {len(self._get_unique_participants(topic_emails))} people over {(topic_emails['date'].max() - topic_emails['date'].min()).days} days.",
+                        'summary': self._generate_story_summary(topic_emails, context=f"topic '{topic}'"),
                         'timeline': topic_emails[['date', 'from', 'to', 'subject', 'summary']].head(5).to_dict(
                             'records'),
                         'importance_score': count * 1.5 + (10 - date_diffs.mean() if len(date_diffs) > 0 else 0)
@@ -260,7 +260,7 @@ class EfficientEnronAnalyzer:
                     'organizations': self._get_all_organizations(burst_emails),
                     'date_range': (burst_emails['date'].min(), burst_emails['date'].max()),
                     'duration_days': 3,
-                    'summary': f"Unusual spike in email activity with {len(burst_emails)} emails. Main topics: {', '.join(self._get_top_topics(burst_emails, 3))}",
+                    'summary': self._generate_story_summary(burst_emails, context="email burst"),
                     'timeline': burst_emails[['date', 'from', 'to', 'subject']].to_dict('records'),
                     'importance_score': len(burst_emails) * 1.2
                 }
@@ -456,6 +456,37 @@ class EfficientEnronAnalyzer:
         )
 
         return fig
+
+    def _generate_story_summary(self, email_subset, context="project"):
+        """Generate a readable story-style summary from emails in the subset"""
+        if email_subset.empty:
+            return "No meaningful summary could be generated due to lack of data."
+
+        participants = self._get_unique_participants(email_subset)
+        organizations = self._get_all_organizations(email_subset)
+        topics = self._get_top_topics(email_subset)
+
+        emails_sorted = email_subset.sort_values(by="date").head(5)
+        messages = []
+
+        for _, row in emails_sorted.iterrows():
+            sender = row['from'].split('@')[0] if '@' in row['from'] else row['from']
+            subject = row['subject'] if isinstance(row['subject'], str) else ""
+            summary = row['summary'] if isinstance(row['summary'], str) else ""
+            date_str = row['date'].strftime('%b %d, %Y')
+            messages.append(f"On {date_str}, {sender} wrote: \"{summary}\"")
+
+        topic_str = f"The main themes included: {', '.join(topics)}." if topics else ""
+        org_str = f"Key organizations involved were: {', '.join(organizations[:2])}." if organizations else ""
+
+        final_summary = (
+                f"During this {context}-related communication, a group of {len(participants)} individuals "
+                f"corresponded over a span of {(email_subset['date'].max() - email_subset['date'].min()).days} days. "
+                f"{org_str} {topic_str} The discussion evolved as follows:\n\n" +
+                "\n".join(messages)
+        )
+
+        return final_summary
 
 
 def main():
