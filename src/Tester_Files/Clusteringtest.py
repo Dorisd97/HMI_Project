@@ -331,6 +331,197 @@ class EmailTopicClusterer:
             'n_clusters': result.get('n_clusters', result.get('n_topics', len(set(labels))))
         }
 
+    def generate_cluster_stories(self, method: str) -> Dict[int, Dict[str, Any]]:
+        """Generate narrative stories for each cluster"""
+        if method not in self.clustering_results:
+            return {}
+
+        result = self.clustering_results[method]
+        labels = result['labels']
+
+        cluster_stories = {}
+
+        for cluster_id in set(labels):
+            # Get all emails in this cluster
+            cluster_emails = [self.emails[idx] for idx, label in enumerate(labels) if label == cluster_id]
+
+            # Analyze cluster characteristics
+            cluster_size = len(cluster_emails)
+
+            # Extract key information
+            senders = [email.get('from', 'Unknown') for email in cluster_emails]
+            recipients = [email.get('to', 'Unknown') for email in cluster_emails]
+            subjects = [email.get('subject', '') for email in cluster_emails]
+            classifications = [email.get('classification', 'Unknown') for email in cluster_emails]
+
+            # Count frequencies
+            sender_counts = Counter(senders).most_common(5)
+            recipient_counts = Counter(recipients).most_common(5)
+            classification_counts = Counter(classifications).most_common(3)
+
+            # Extract entities
+            all_entities = {
+                'people': [],
+                'organizations': [],
+                'locations': [],
+                'projects': [],
+                'legal': [],
+                'topics': []
+            }
+
+            for email in cluster_emails:
+                entities = email.get('entities', {})
+                for category in all_entities.keys():
+                    if category in entities:
+                        all_entities[category].extend(entities[category])
+
+            # Count entity frequencies
+            entity_counts = {}
+            for category, entity_list in all_entities.items():
+                if entity_list:
+                    entity_counts[category] = Counter(entity_list).most_common(5)
+                else:
+                    entity_counts[category] = []
+
+            # Analyze timeframe
+            dates = []
+            for email in cluster_emails:
+                try:
+                    date_str = email.get('date', '')
+                    if date_str:
+                        date_obj = pd.to_datetime(date_str, format='%d.%m.%Y %H:%M:%S', errors='coerce')
+                        if pd.notna(date_obj):
+                            dates.append(date_obj)
+                except:
+                    continue
+
+            timeframe_info = {}
+            if dates:
+                timeframe_info = {
+                    'start_date': min(dates),
+                    'end_date': max(dates),
+                    'span_days': (max(dates) - min(dates)).days,
+                    'total_dates': len(dates)
+                }
+
+            # Generate story
+            story = self._create_cluster_narrative(
+                cluster_id, cluster_size, sender_counts, recipient_counts,
+                classification_counts, entity_counts, timeframe_info, subjects[:5]
+            )
+
+            cluster_stories[cluster_id] = {
+                'story': story,
+                'size': cluster_size,
+                'top_senders': sender_counts,
+                'top_recipients': recipient_counts,
+                'classifications': classification_counts,
+                'entities': entity_counts,
+                'timeframe': timeframe_info,
+                'sample_subjects': subjects[:5]
+            }
+
+        return cluster_stories
+
+    def _create_cluster_narrative(self, cluster_id, size, senders, recipients,
+                                  classifications, entities, timeframe, sample_subjects):
+        """Create a narrative story for a cluster"""
+
+        story_parts = []
+
+        # Introduction
+        story_parts.append(
+            f"**Cluster {cluster_id}** contains {size} emails that reveal a distinct communication pattern.")
+
+        # Main participants
+        if senders:
+            top_sender = senders[0]
+            if len(senders) > 1:
+                story_parts.append(
+                    f"The primary communicator is **{top_sender[0].split('@')[0] if '@' in top_sender[0] else top_sender[0]}** ({top_sender[1]} emails), along with {len(senders) - 1} other active senders.")
+            else:
+                story_parts.append(
+                    f"The primary communicator is **{top_sender[0].split('@')[0] if '@' in top_sender[0] else top_sender[0]}** ({top_sender[1]} emails).")
+
+        # Communication type
+        if classifications:
+            main_type = classifications[0]
+            if main_type[1] / size > 0.7:
+                story_parts.append(
+                    f"This cluster is predominantly focused on **{main_type[0]}** ({main_type[1]} emails, {main_type[1] / size:.1%} of cluster).")
+            else:
+                story_parts.append(
+                    f"The communications span multiple categories, primarily **{main_type[0]}** ({main_type[1]} emails), suggesting diverse but related business activities.")
+
+        # Time context
+        if timeframe and timeframe.get('total_dates', 0) > 0:
+            start_date = timeframe['start_date'].strftime('%B %Y')
+            end_date = timeframe['end_date'].strftime('%B %Y')
+            if timeframe['span_days'] < 30:
+                story_parts.append(
+                    f"These communications occurred within a concentrated timeframe in **{start_date}**, suggesting urgent or time-sensitive business matters.")
+            elif timeframe['span_days'] < 180:
+                story_parts.append(
+                    f"The conversation thread spans from **{start_date}** to **{end_date}**, indicating an ongoing project or business relationship.")
+            else:
+                story_parts.append(
+                    f"This represents a long-term communication pattern from **{start_date}** to **{end_date}**, spanning {timeframe['span_days']} days.")
+
+        # Key business context
+        business_context = []
+
+        # Organizations
+        if entities.get('organizations'):
+            org_names = [org[0] for org in entities['organizations'][:3]]
+            business_context.append(f"involving **{', '.join(org_names)}**")
+
+        # Projects
+        if entities.get('projects'):
+            project_names = [proj[0] for proj in entities['projects'][:2]]
+            business_context.append(f"related to **{', '.join(project_names)}**")
+
+        # Locations
+        if entities.get('locations'):
+            location_names = [loc[0] for loc in entities['locations'][:2]]
+            business_context.append(f"with activities in **{', '.join(location_names)}**")
+
+        if business_context:
+            story_parts.append(f"The business context centers around {' and '.join(business_context)}.")
+
+        # Key topics and themes
+        if entities.get('topics'):
+            topic_names = [topic[0] for topic in entities['topics'][:3]]
+            story_parts.append(f"Key discussion topics include **{', '.join(topic_names)}**.")
+
+        # Legal/regulatory aspects
+        if entities.get('legal'):
+            legal_items = [legal[0] for legal in entities['legal'][:2]]
+            story_parts.append(f"Legal and regulatory considerations involve **{', '.join(legal_items)}**.")
+
+        # Communication pattern insight
+        if len(set([r[0] for r in recipients[:5]])) > 3:
+            story_parts.append(
+                "The communication pattern shows **broad stakeholder engagement** with multiple recipients, suggesting coordination or information dissemination activities.")
+        elif len(set([r[0] for r in recipients[:5]])) <= 2:
+            story_parts.append(
+                "The communication pattern shows **focused, targeted discussions** between specific individuals, indicating detailed collaboration or decision-making processes.")
+
+        # Subject analysis insight
+        if sample_subjects:
+            common_words = []
+            for subject in sample_subjects:
+                words = subject.lower().split()
+                common_words.extend([word for word in words if len(word) > 3])
+
+            if common_words:
+                word_freq = Counter(common_words).most_common(3)
+                frequent_terms = [word[0] for word in word_freq if word[1] > 1]
+                if frequent_terms:
+                    story_parts.append(
+                        f"Recurring themes in email subjects include terms like **{', '.join(frequent_terms)}**, providing insight into the operational focus.")
+
+        return ' '.join(story_parts)
+
 
 def create_cluster_scatter_plot(clusterer, method, reduction_method='pca'):
     """Create interactive scatter plot of clusters"""
@@ -657,7 +848,8 @@ def main():
             st.subheader(f"📊 {method.replace('_', ' ').title()} Results")
 
             # Create tabs for different views
-            tab1, tab2, tab3, tab4 = st.tabs(["Cluster Plot", "Summary Charts", "Cluster Details", "Sample Emails"])
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(
+                ["Cluster Plot", "Cluster Stories", "Summary Charts", "Cluster Details", "Sample Emails"])
 
             with tab1:
                 st.subheader("🎯 Interactive Cluster Visualization")
@@ -692,12 +884,103 @@ def main():
                         st.error("Could not create cluster visualization")
 
             with tab2:
+                st.subheader("📖 Cluster Stories & Business Context")
+
+                with st.spinner("Generating cluster stories..."):
+                    cluster_stories = clusterer.generate_cluster_stories(method)
+
+                if cluster_stories:
+                    # Overview metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Clusters", len(cluster_stories))
+                    with col2:
+                        avg_size = np.mean([story['size'] for story in cluster_stories.values()])
+                        st.metric("Avg Cluster Size", f"{avg_size:.1f}")
+                    with col3:
+                        largest_cluster = max(cluster_stories.values(), key=lambda x: x['size'])
+                        st.metric("Largest Cluster", largest_cluster['size'])
+                    with col4:
+                        smallest_cluster = min(cluster_stories.values(), key=lambda x: x['size'])
+                        st.metric("Smallest Cluster", smallest_cluster['size'])
+
+                    st.markdown("---")
+
+                    # Display stories for each cluster
+                    for cluster_id in sorted(cluster_stories.keys()):
+                        story_data = cluster_stories[cluster_id]
+
+                        with st.expander(f"📁 Cluster {cluster_id} Story ({story_data['size']} emails)", expanded=False):
+                            # Main story
+                            st.markdown("### 📝 Narrative")
+                            st.write(story_data['story'])
+
+                            # Key details in columns
+                            col1, col2 = st.columns(2)
+
+                            with col1:
+                                st.markdown("### 👥 Key Participants")
+                                if story_data['top_senders']:
+                                    st.write("**Top Senders:**")
+                                    for sender, count in story_data['top_senders'][:3]:
+                                        sender_name = sender.split('@')[0] if '@' in sender else sender
+                                        st.write(f"• {sender_name}: {count} emails")
+
+                                if story_data['classifications']:
+                                    st.write("**Communication Types:**")
+                                    for class_name, count in story_data['classifications']:
+                                        percentage = (count / story_data['size']) * 100
+                                        st.write(f"• {class_name}: {count} emails ({percentage:.1f}%)")
+
+                            with col2:
+                                st.markdown("### 🏢 Business Context")
+
+                                # Organizations
+                                if story_data['entities'].get('organizations'):
+                                    st.write("**Organizations:**")
+                                    for org, count in story_data['entities']['organizations'][:3]:
+                                        st.write(f"• {org} ({count} mentions)")
+
+                                # Projects
+                                if story_data['entities'].get('projects'):
+                                    st.write("**Projects:**")
+                                    for project, count in story_data['entities']['projects'][:3]:
+                                        st.write(f"• {project} ({count} mentions)")
+
+                                # Locations
+                                if story_data['entities'].get('locations'):
+                                    st.write("**Locations:**")
+                                    for location, count in story_data['entities']['locations'][:3]:
+                                        st.write(f"• {location} ({count} mentions)")
+
+                            # Timeline information
+                            if story_data['timeframe'] and story_data['timeframe'].get('total_dates', 0) > 0:
+                                st.markdown("### 📅 Timeline")
+                                timeframe = story_data['timeframe']
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.write(f"**Start:** {timeframe['start_date'].strftime('%B %d, %Y')}")
+                                with col2:
+                                    st.write(f"**End:** {timeframe['end_date'].strftime('%B %d, %Y')}")
+                                with col3:
+                                    st.write(f"**Duration:** {timeframe['span_days']} days")
+
+                            # Sample subjects
+                            if story_data['sample_subjects']:
+                                st.markdown("### 📧 Sample Email Subjects")
+                                for i, subject in enumerate(story_data['sample_subjects'][:3], 1):
+                                    st.write(f"{i}. {subject}")
+
+                else:
+                    st.warning("Could not generate cluster stories. Please ensure clustering has been performed.")
+
+            with tab3:
                 st.subheader("📈 Summary Analysis")
                 summary_plot = create_cluster_summary_plots(clusterer, method)
                 if summary_plot:
                     st.plotly_chart(summary_plot, use_container_width=True)
 
-            with tab3:
+            with tab4:
                 st.subheader("🏷️ Cluster Characteristics")
                 result = clusterer.clustering_results[method]
 
@@ -720,7 +1003,7 @@ def main():
                         with st.expander(f"Topic {topic_id}"):
                             st.write(", ".join(words))
 
-            with tab4:
+            with tab5:
                 st.subheader("📧 Sample Emails by Cluster")
                 # Show sample emails for each cluster
                 labels = result['labels']
