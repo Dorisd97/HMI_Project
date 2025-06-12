@@ -27,7 +27,7 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     .story-card {
-        background-color: #f8f9fa;
+        background-color: #14de17;
         padding: 1.5rem;
         border-radius: 0.5rem;
         border-left: 4px solid #1f77b4;
@@ -260,7 +260,7 @@ class EfficientEnronAnalyzer:
                     'organizations': self._get_all_organizations(burst_emails),
                     'date_range': (burst_emails['date'].min(), burst_emails['date'].max()),
                     'duration_days': 3,
-                    'summary': self._generate_story_summary(burst_emails, context="email burst"),
+                    'summary': self._generate_burst_story_summary(burst_emails),
                     'timeline': burst_emails[['date', 'from', 'to', 'subject']].to_dict('records'),
                     'importance_score': len(burst_emails) * 1.2
                 }
@@ -487,6 +487,53 @@ class EfficientEnronAnalyzer:
         )
 
         return final_summary
+
+    def _generate_burst_story_summary(self, email_subset):
+        """Generate a narrative summary from burst emails"""
+        if email_subset.empty:
+            return "No meaningful burst summary could be generated."
+
+        email_subset = email_subset.sort_values(by='date')
+        participants = self._get_unique_participants(email_subset)
+        organizations = self._get_all_organizations(email_subset)
+        topics = self._get_top_topics(email_subset, 5)
+
+        subjects = email_subset['subject'].dropna().tolist()
+        subjects_clean = list(set([s.strip() for s in subjects if isinstance(s, str) and len(s) > 5]))
+
+        date_str = email_subset['date'].min().strftime('%b %d, %Y')
+        total_emails = len(email_subset)
+
+        # Find key events and actors
+        actors = list(set([s.split('@')[0] for s in email_subset['from'].dropna().unique()]))
+
+        summary = f"""
+    📅 **Email Spike on {date_str}**
+
+    On this day, {total_emails} emails were exchanged among {len(participants)} participants, involving organizations such as {', '.join(organizations[:3])}.
+    Key topics of discussion included: {', '.join(topics)}.
+
+    ### 🧩 Key Themes Identified:
+    - {subjects_clean[0] if len(subjects_clean) > 0 else 'N/A'}
+    - {subjects_clean[1] if len(subjects_clean) > 1 else 'N/A'}
+    - {subjects_clean[2] if len(subjects_clean) > 2 else 'N/A'}
+
+    ### 🔍 Notable Events:
+    """
+
+        # Use early emails to build a basic event chain
+        events = []
+        for _, row in email_subset.head(5).iterrows():
+            sender = row['from'].split('@')[0] if '@' in row['from'] else row['from']
+            subject = row['subject'][:60] if isinstance(row['subject'], str) else ''
+            summary_line = row['summary'][:100] if isinstance(row['summary'], str) else ''
+            events.append(f"- **{sender}** sent update: *{subject}* — \"{summary_line}\"")
+
+        summary += "\n".join(events)
+
+        summary += f"\n\nThis spike may be linked to a critical turning point in ongoing issues such as {', '.join(topics[:2])}, as reflected in sudden participation and information sharing."
+
+        return summary.strip()
 
 
 def main():
