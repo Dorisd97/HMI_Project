@@ -7,17 +7,69 @@ from datetime import datetime, timedelta
 import numpy as np
 from collections import Counter, defaultdict
 import networkx as nx
-from transformers import pipeline
+import requests
 
-# Set page config
+# ================== OLLAMA SUMMARIZER FOR BURST STORIES ====================
+
+def summarize_with_ollama(text, model="mistral"):
+    """Send a prompt to Ollama and return summary text from Mistral."""
+    response = requests.post(
+        "http://localhost:11434/api/generate",
+        json={
+            "model": model,
+            "prompt": text,
+            "stream": False
+        }
+    )
+    if response.ok:
+        return response.json()['response']
+    else:
+        return f"❌ Error from Ollama: {response.status_code} - {response.text}"
+
+def summarize_cluster_emails(email_subset, context="event"):
+    if email_subset.empty:
+        return "No emails to summarize."
+
+    # Combine subject + summary for each email
+    texts = []
+    for _, row in email_subset.iterrows():
+        subject = row['subject'] if isinstance(row['subject'], str) else ''
+        summary = row['summary'] if isinstance(row['summary'], str) else ''
+        combined = f"Subject: {subject}. Summary: {summary}"
+        texts.append(combined)
+
+    # Chunking: keep each chunk under 1000 words
+    chunks = []
+    current_chunk = ""
+    for entry in texts:
+        if len((current_chunk + entry).split()) < 1000:
+            current_chunk += "\n" + entry
+        else:
+            chunks.append(current_chunk)
+            current_chunk = entry
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    summaries = []
+    for i, chunk in enumerate(chunks):
+        prompt = (
+            f"You are an expert analyst. Summarize the following internal emails related to {context} "
+            f"as a coherent story. Capture key developments, actors, and what happened:\n\n{chunk}\n"
+            "Write this as a readable summary for a general audience."
+        )
+        summary = summarize_with_ollama(prompt)
+        summaries.append(f"🧩 Part {i+1}:\n{summary.strip()}")
+
+    return "📘 Summary:\n" + "\n\n".join(summaries)
+
+# =================== STREAMLIT PAGE CONFIG/CSS ======================
+
 st.set_page_config(
     page_title="Efficient Enron Email Analysis",
     page_icon="📧",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -43,6 +95,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# =================== ANALYZER CLASS ===========================
 
 class EfficientEnronAnalyzer:
     def __init__(self):
@@ -59,11 +112,7 @@ class EfficientEnronAnalyzer:
                     self.emails = pd.DataFrame(data)
                 else:
                     self.emails = pd.DataFrame([data])
-
-                # Convert date strings to datetime
                 self.emails['date'] = pd.to_datetime(self.emails['date'], format='%d.%m.%Y %H:%M:%S')
-
-                # Extract entities efficiently
                 self._extract_all_entities()
                 return True
         except Exception as e:
@@ -71,7 +120,6 @@ class EfficientEnronAnalyzer:
             return False
 
     def _extract_all_entities(self):
-        """Extract and flatten all entities for efficient access"""
         self.emails['people'] = self.emails['entities'].apply(
             lambda x: x.get('people', []) if isinstance(x, dict) else []
         )
@@ -89,52 +137,27 @@ class EfficientEnronAnalyzer:
         )
 
     def generate_stories_efficiently(self):
-        """Generate stories using entity-based clustering and temporal patterns"""
         stories = []
-
-        # 1. Project-based stories
-        project_stories = self._find_project_stories()
-        stories.extend(project_stories)
-
-        # 2. Topic-based temporal clusters
-        topic_stories = self._find_topic_stories()
-        stories.extend(topic_stories)
-
-        # 3. Key participant stories
-        participant_stories = self._find_participant_stories()
-        stories.extend(participant_stories)
-
-        # 4. Time-based burst detection
-        burst_stories = self._find_burst_stories()
-        stories.extend(burst_stories)
-
-        # Sort stories by importance score
+        stories.extend(self._find_project_stories())
+        stories.extend(self._find_topic_stories())
+        stories.extend(self._find_participant_stories())
+        stories.extend(self._find_burst_stories())
         stories.sort(key=lambda x: x['importance_score'], reverse=True)
-        self.stories = stories[:10]  # Top 10 stories
-
+        self.stories = stories[:10]
         return self.stories
 
     def _find_project_stories(self):
-        """Find stories based on projects mentioned"""
         stories = []
-
-        # Get all emails with projects
         project_emails = self.emails[self.emails['projects'].apply(len) > 0].copy()
-
         if len(project_emails) == 0:
             return stories
-
-        # Group by project
         project_groups = defaultdict(list)
         for idx, email in project_emails.iterrows():
             for project in email['projects']:
                 project_groups[project].append(idx)
-
-        # Create stories for significant projects
         for project, email_indices in project_groups.items():
-            if len(email_indices) >= 2:  # At least 2 emails
+            if len(email_indices) >= 2:
                 project_emails_subset = self.emails.iloc[email_indices]
-
                 story = {
                     'type': 'project',
                     'title': f"Project: {project}",
@@ -145,34 +168,22 @@ class EfficientEnronAnalyzer:
                     'duration_days': (project_emails_subset['date'].max() - project_emails_subset['date'].min()).days,
                     'summary': self._generate_story_summary(project_emails_subset, context=f"project '{project}'"),
                     'timeline': project_emails_subset[['date', 'from', 'to', 'subject', 'summary']].to_dict('records'),
-                    'importance_score': len(email_indices) * 2 + len(
-                        self._get_unique_participants(project_emails_subset))
+                    'importance_score': len(email_indices) * 2 + len(self._get_unique_participants(project_emails_subset))
                 }
                 stories.append(story)
-
         return stories
 
     def _find_topic_stories(self):
-        """Find stories based on topics with temporal clustering"""
         stories = []
-
-        # Get topic frequencies
         all_topics = []
         for topics in self.emails['topics']:
             all_topics.extend(topics)
-
         topic_counter = Counter(all_topics)
-
-        # Analyze significant topics
         for topic, count in topic_counter.most_common(10):
-            if count >= 3:  # At least 3 mentions
+            if count >= 3:
                 topic_emails = self.emails[self.emails['topics'].apply(lambda x: topic in x)]
-
-                # Check for temporal clustering
                 dates = pd.to_datetime(topic_emails['date'])
                 date_diffs = dates.diff().dt.days.dropna()
-
-                # If emails are clustered in time (avg gap < 7 days)
                 if len(date_diffs) > 0 and date_diffs.mean() < 7:
                     story = {
                         'type': 'topic_cluster',
@@ -183,40 +194,30 @@ class EfficientEnronAnalyzer:
                         'date_range': (topic_emails['date'].min(), topic_emails['date'].max()),
                         'duration_days': (topic_emails['date'].max() - topic_emails['date'].min()).days,
                         'summary': self._generate_story_summary(topic_emails, context=f"topic '{topic}'"),
-                        'timeline': topic_emails[['date', 'from', 'to', 'subject', 'summary']].head(5).to_dict(
-                            'records'),
+                        'timeline': topic_emails[['date', 'from', 'to', 'subject', 'summary']].head(5).to_dict('records'),
                         'importance_score': count * 1.5 + (10 - date_diffs.mean() if len(date_diffs) > 0 else 0)
                     }
                     stories.append(story)
-
         return stories
 
     def _find_participant_stories(self):
-        """Find stories based on key participants"""
         stories = []
-
-        # Get most active senders
         sender_counts = self.emails['from'].value_counts()
-
         for sender, count in sender_counts.head(5).items():
-            if count >= 5:  # At least 5 emails
+            if count >= 5:
                 sender_emails = self.emails[self.emails['from'] == sender]
-
-                # Analyze their communication patterns
                 recipients = []
                 for to in sender_emails['to']:
                     if isinstance(to, str):
                         recipients.append(to)
                     elif isinstance(to, list):
                         recipients.extend(to)
-
                 unique_recipients = list(set(recipients))
-
                 story = {
                     'type': 'key_participant',
                     'title': f"Key Player: {sender.split('@')[0]}",
                     'email_count': count,
-                    'participants': unique_recipients[:10],  # Top 10 recipients
+                    'participants': unique_recipients[:10],
                     'organizations': self._get_all_organizations(sender_emails),
                     'date_range': (sender_emails['date'].min(), sender_emails['date'].max()),
                     'duration_days': (sender_emails['date'].max() - sender_emails['date'].min()).days,
@@ -225,33 +226,22 @@ class EfficientEnronAnalyzer:
                     'importance_score': count + len(unique_recipients) * 0.5
                 }
                 stories.append(story)
-
         return stories
 
     def _find_burst_stories(self):
-        """Find stories based on email bursts"""
         stories = []
-
-        # Group by date
         daily_counts = self.emails.groupby(self.emails['date'].dt.date).size()
-
-        # Find days with unusually high activity
         mean_count = daily_counts.mean()
         std_count = daily_counts.std()
         threshold = mean_count + 2 * std_count
-
         burst_dates = daily_counts[daily_counts > threshold].index
-
         for burst_date in burst_dates:
-            # Get emails from this date and surrounding days
             start_date = burst_date - timedelta(days=1)
             end_date = burst_date + timedelta(days=1)
-
             burst_emails = self.emails[
                 (self.emails['date'].dt.date >= start_date) &
                 (self.emails['date'].dt.date <= end_date)
                 ]
-
             if len(burst_emails) >= 5:
                 story = {
                     'type': 'activity_burst',
@@ -266,149 +256,114 @@ class EfficientEnronAnalyzer:
                     'importance_score': len(burst_emails) * 1.2
                 }
                 stories.append(story)
-
         return stories
 
     def _get_unique_participants(self, email_subset):
-        """Get unique participants from email subset"""
         participants = set()
         participants.update(email_subset['from'].unique())
-
         for to_list in email_subset['to']:
             if isinstance(to_list, str):
                 participants.add(to_list)
             elif isinstance(to_list, list):
                 participants.update(to_list)
-
         return list(participants)
 
     def _get_all_organizations(self, email_subset):
-        """Get all organizations mentioned"""
         orgs = []
         for org_list in email_subset['organizations']:
             orgs.extend(org_list)
         return list(set(orgs))
 
     def _get_top_topics(self, email_subset, n=3):
-        """Get top N topics from email subset"""
         all_topics = []
         for topic_list in email_subset['topics']:
             all_topics.extend(topic_list)
-
         if not all_topics:
             return ["general communication"]
-
         topic_counts = Counter(all_topics)
         return [topic for topic, _ in topic_counts.most_common(n)]
 
-    def _generate_project_summary(self, project_name, email_subset):
-        """Generate summary for a project"""
+    def _generate_story_summary(self, email_subset, context="project"):
+        if email_subset.empty:
+            return "No meaningful summary could be generated due to lack of data."
         participants = self._get_unique_participants(email_subset)
-        orgs = self._get_all_organizations(email_subset)
+        organizations = self._get_all_organizations(email_subset)
         topics = self._get_top_topics(email_subset)
-
-        duration = (email_subset['date'].max() - email_subset['date'].min()).days
-
-        summary = f"{project_name} involved {len(participants)} people"
-        if orgs:
-            summary += f" from organizations including {', '.join(orgs[:2])}"
-        summary += f" over {duration} days. "
-        if topics:
-            summary += f"Key topics discussed: {', '.join(topics)}."
-
-        return summary
+        emails_sorted = email_subset.sort_values(by="date").head(5)
+        messages = []
+        for _, row in emails_sorted.iterrows():
+            sender = row['from'].split('@')[0] if '@' in row['from'] else row['from']
+            subject = row['subject'] if isinstance(row['subject'], str) else ""
+            summary = row['summary'] if isinstance(row['summary'], str) else ""
+            date_str = row['date'].strftime('%b %d, %Y')
+            messages.append(f"On {date_str}, {sender} wrote: \"{summary}\"")
+        topic_str = f"The main themes included: {', '.join(topics)}." if topics else ""
+        org_str = f"Key organizations involved were: {', '.join(organizations[:2])}." if organizations else ""
+        final_summary = (
+            f"During this {context}-related communication, a group of {len(participants)} individuals "
+            f"corresponded over a span of {(email_subset['date'].max() - email_subset['date'].min()).days} days. "
+            f"{org_str} {topic_str} The discussion evolved as follows:\n\n" +
+            "\n".join(messages)
+        )
+        return final_summary
 
     def create_entity_network(self):
-        """Create efficient entity-based network"""
         G = nx.Graph()
-
-        # Add nodes and edges based on shared entities
         for idx, email in self.emails.iterrows():
             sender = email['from']
-
-            # Connect sender to recipients
             recipients = [email['to']] if isinstance(email['to'], str) else email['to']
             for recipient in recipients:
                 if pd.notna(recipient):
                     G.add_edge(sender, recipient, weight=G.get_edge_data(sender, recipient, {}).get('weight', 0) + 1)
-
-            # Connect people through shared projects
             for project in email['projects']:
                 G.add_node(project, node_type='project')
                 G.add_edge(sender, project, edge_type='involved_in')
-
-            # Connect people through shared organizations
             for org in email['organizations']:
                 G.add_node(org, node_type='organization')
                 G.add_edge(sender, org, edge_type='associated_with')
-
         self.entity_graph = G
         return G
 
     def visualize_timeline(self):
-        """Create efficient timeline visualization"""
         daily_counts = self.emails.groupby(self.emails['date'].dt.date).size().reset_index()
         daily_counts.columns = ['date', 'count']
-
         fig = px.line(daily_counts, x='date', y='count',
                       title='Email Activity Timeline',
                       labels={'count': 'Number of Emails', 'date': 'Date'})
-
-        fig.update_layout(
-            hovermode='x unified',
-            height=400
-        )
-
+        fig.update_layout(hovermode='x unified', height=400)
         return fig
 
     def visualize_entity_relationships(self):
-        """Visualize entity relationships efficiently"""
         if self.entity_graph is None:
             self.create_entity_network()
-
         G = self.entity_graph
-
-        # Filter to most important nodes
         degree_dict = dict(G.degree())
         important_nodes = sorted(degree_dict.items(), key=lambda x: x[1], reverse=True)[:50]
         important_node_names = [node for node, degree in important_nodes]
-
-        # Create subgraph
         subgraph = G.subgraph(important_node_names)
-
-        # Layout
         pos = nx.spring_layout(subgraph, k=2, iterations=50)
-
-        # Create traces
         edge_x = []
         edge_y = []
-
         for edge in subgraph.edges():
             x0, y0 = pos[edge[0]]
             x1, y1 = pos[edge[1]]
             edge_x.extend([x0, x1, None])
             edge_y.extend([y0, y1, None])
-
         edge_trace = go.Scatter(
             x=edge_x, y=edge_y,
             line=dict(width=0.5, color='#888'),
             hoverinfo='none',
             mode='lines'
         )
-
-        # Node trace
         node_x = []
         node_y = []
         node_color = []
         node_size = []
         node_text = []
-
         for node in subgraph.nodes():
             x, y = pos[node]
             node_x.append(x)
             node_y.append(y)
-
-            # Color by type
             node_type = subgraph.nodes[node].get('node_type', 'person')
             if node_type == 'project':
                 node_color.append('#ff7f0e')
@@ -416,11 +371,8 @@ class EfficientEnronAnalyzer:
                 node_color.append('#2ca02c')
             else:
                 node_color.append('#1f77b4')
-
-            # Size by degree
             node_size.append(min(subgraph.degree(node) * 3 + 10, 30))
             node_text.append(node.split('@')[0] if '@' in node else node)
-
         node_trace = go.Scatter(
             x=node_x, y=node_y,
             mode='markers+text',
@@ -435,7 +387,6 @@ class EfficientEnronAnalyzer:
             hoverinfo='text',
             hovertext=node_text
         )
-
         fig = go.Figure(data=[edge_trace, node_trace])
         fig.update_layout(
             title="Key Entity Relationships",
@@ -455,128 +406,9 @@ class EfficientEnronAnalyzer:
                 )
             ]
         )
-
         return fig
 
-    def _generate_story_summary(self, email_subset, context="project"):
-        """Generate a readable story-style summary from emails in the subset"""
-        if email_subset.empty:
-            return "No meaningful summary could be generated due to lack of data."
-
-        participants = self._get_unique_participants(email_subset)
-        organizations = self._get_all_organizations(email_subset)
-        topics = self._get_top_topics(email_subset)
-
-        emails_sorted = email_subset.sort_values(by="date").head(5)
-        messages = []
-
-        for _, row in emails_sorted.iterrows():
-            sender = row['from'].split('@')[0] if '@' in row['from'] else row['from']
-            subject = row['subject'] if isinstance(row['subject'], str) else ""
-            summary = row['summary'] if isinstance(row['summary'], str) else ""
-            date_str = row['date'].strftime('%b %d, %Y')
-            messages.append(f"On {date_str}, {sender} wrote: \"{summary}\"")
-
-        topic_str = f"The main themes included: {', '.join(topics)}." if topics else ""
-        org_str = f"Key organizations involved were: {', '.join(organizations[:2])}." if organizations else ""
-
-        final_summary = (
-                f"During this {context}-related communication, a group of {len(participants)} individuals "
-                f"corresponded over a span of {(email_subset['date'].max() - email_subset['date'].min()).days} days. "
-                f"{org_str} {topic_str} The discussion evolved as follows:\n\n" +
-                "\n".join(messages)
-        )
-
-        return final_summary
-
-    def _generate_burst_story_summary(self, email_subset):
-        """Generate a narrative summary from burst emails"""
-        if email_subset.empty:
-            return "No meaningful burst summary could be generated."
-
-        email_subset = email_subset.sort_values(by='date')
-        participants = self._get_unique_participants(email_subset)
-        organizations = self._get_all_organizations(email_subset)
-        topics = self._get_top_topics(email_subset, 5)
-
-        subjects = email_subset['subject'].dropna().tolist()
-        subjects_clean = list(set([s.strip() for s in subjects if isinstance(s, str) and len(s) > 5]))
-
-        date_str = email_subset['date'].min().strftime('%b %d, %Y')
-        total_emails = len(email_subset)
-
-        # Find key events and actors
-        actors = list(set([s.split('@')[0] for s in email_subset['from'].dropna().unique()]))
-
-        summary = f"""
-    📅 **Email Spike on {date_str}**
-
-    On this day, {total_emails} emails were exchanged among {len(participants)} participants, involving organizations such as {', '.join(organizations[:3])}.
-    Key topics of discussion included: {', '.join(topics)}.
-
-    ### 🧩 Key Themes Identified:
-    - {subjects_clean[0] if len(subjects_clean) > 0 else 'N/A'}
-    - {subjects_clean[1] if len(subjects_clean) > 1 else 'N/A'}
-    - {subjects_clean[2] if len(subjects_clean) > 2 else 'N/A'}
-
-    ### 🔍 Notable Events:
-    """
-
-        # Use early emails to build a basic event chain
-        events = []
-        for _, row in email_subset.head(5).iterrows():
-            sender = row['from'].split('@')[0] if '@' in row['from'] else row['from']
-            subject = row['subject'][:60] if isinstance(row['subject'], str) else ''
-            summary_line = row['summary'][:100] if isinstance(row['summary'], str) else ''
-            events.append(f"- **{sender}** sent update: *{subject}* — \"{summary_line}\"")
-
-        summary += "\n".join(events)
-
-        summary += f"\n\nThis spike may be linked to a critical turning point in ongoing issues such as {', '.join(topics[:2])}, as reflected in sudden participation and information sharing."
-
-        return summary.strip()
-
-summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
-
-def summarize_cluster_emails(email_subset, context="event"):
-    """Batch-safe summarizer for email clusters using DistilBART"""
-    if email_subset.empty:
-        return "No emails to summarize."
-
-    # Combine subject + summary for each email
-    texts = []
-    for _, row in email_subset.iterrows():
-        subject = row['subject'] if isinstance(row['subject'], str) else ''
-        summary = row['summary'] if isinstance(row['summary'], str) else ''
-        combined = f"Subject: {subject}. Summary: {summary}"
-        texts.append(combined)
-
-    # Break into chunks to avoid token limit overflow
-    chunks = []
-    current_chunk = ""
-    for entry in texts:
-        if len((current_chunk + entry).split()) < 700:
-            current_chunk += "\n" + entry
-        else:
-            chunks.append(current_chunk)
-            current_chunk = entry
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    # Summarize each chunk separately
-    summaries = []
-    for i, chunk in enumerate(chunks):
-        prompt = (
-            f"The following are internal email messages related to {context}. "
-            f"Summarize them clearly and cohesively:\n\n{chunk}"
-        )
-        try:
-            result = summarizer(prompt, max_length=300, min_length=80, do_sample=False)
-            summaries.append(f"🧩 Part {i+1}:\n{result[0]['summary_text']}")
-        except Exception as e:
-            summaries.append(f"❌ Error summarizing part {i+1}: {str(e)}")
-
-    return "📘 Summary:\n" + "\n\n".join(summaries)
+# =================== STREAMLIT UI ===========================
 
 def main():
     st.markdown('<h1 class="main-header">📧 Efficient Enron Email Analysis</h1>', unsafe_allow_html=True)
@@ -603,8 +435,6 @@ def main():
 
         with tab1:
             st.header("Dataset Overview")
-
-            # Key metrics
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Total Emails", len(analyzer.emails))
@@ -616,40 +446,31 @@ def main():
             with col4:
                 total_projects = sum(len(p) for p in analyzer.emails['projects'])
                 st.metric("Projects Mentioned", total_projects)
-
-            # Timeline
             st.subheader("Email Activity Timeline")
             timeline_fig = analyzer.visualize_timeline()
             st.plotly_chart(timeline_fig, use_container_width=True)
-
-            # Entity statistics
             col1, col2 = st.columns(2)
-
             with col1:
                 st.subheader("Top Topics")
                 all_topics = []
                 for topics in analyzer.emails['topics']:
                     all_topics.extend(topics)
                 topic_counts = Counter(all_topics).most_common(10)
-
                 topic_df = pd.DataFrame(topic_counts, columns=['Topic', 'Count'])
                 fig = px.bar(topic_df, x='Count', y='Topic', orientation='h')
                 st.plotly_chart(fig, use_container_width=True)
-
             with col2:
                 st.subheader("Top Organizations")
                 all_orgs = []
                 for orgs in analyzer.emails['organizations']:
                     all_orgs.extend(orgs)
                 org_counts = Counter(all_orgs).most_common(10)
-
                 org_df = pd.DataFrame(org_counts, columns=['Organization', 'Count'])
                 fig = px.bar(org_df, x='Count', y='Organization', orientation='h')
                 st.plotly_chart(fig, use_container_width=True)
 
         with tab2:
             st.header("📚 Discovered Stories")
-
             if analyzer.stories:
                 for idx, story in enumerate(analyzer.stories, 1):
                     st.markdown(f"""
@@ -659,7 +480,6 @@ def main():
                         <p><strong>Importance Score:</strong> {story['importance_score']:.1f}</p>
                     </div>
                     """, unsafe_allow_html=True)
-
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("📧 Emails", story['email_count'])
@@ -667,30 +487,24 @@ def main():
                         st.metric("👥 Participants", len(story['participants']))
                     with col3:
                         st.metric("📅 Duration", f"{story['duration_days']} days")
-
                     st.write("**Summary:**", story['summary'])
-
                     with st.expander("View Details"):
                         st.write("**Organizations Involved:**", ', '.join(story['organizations'][:5]))
-
                         st.write("**Timeline Sample:**")
                         timeline_df = pd.DataFrame(story['timeline'][:5])
                         if 'date' in timeline_df.columns:
                             timeline_df['date'] = pd.to_datetime(timeline_df['date']).dt.strftime('%Y-%m-%d %H:%M')
                         st.dataframe(timeline_df)
-
                     st.write("---")
             else:
                 st.info("Click 'Generate Analysis' to discover stories")
 
         with tab3:
             st.header("Entity Network Visualization")
-
             if st.button("Generate Network"):
                 with st.spinner("Building network..."):
                     network_fig = analyzer.visualize_entity_relationships()
                     st.plotly_chart(network_fig, use_container_width=True)
-
                 if analyzer.entity_graph:
                     st.subheader("Network Statistics")
                     col1, col2, col3 = st.columns(3)
@@ -703,7 +517,6 @@ def main():
 
     else:
         st.info("👆 Please upload a JSON file to begin analysis")
-
         with st.expander("📋 Expected JSON Format"):
             st.code('''
 {
@@ -723,7 +536,6 @@ def main():
   }
 }
             ''', language='json')
-
 
 if __name__ == "__main__":
     main()
