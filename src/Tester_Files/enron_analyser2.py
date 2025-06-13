@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from collections import Counter, defaultdict
 import networkx as nx
+from transformers import pipeline
 
 # Set page config
 st.set_page_config(
@@ -260,7 +261,7 @@ class EfficientEnronAnalyzer:
                     'organizations': self._get_all_organizations(burst_emails),
                     'date_range': (burst_emails['date'].min(), burst_emails['date'].max()),
                     'duration_days': 3,
-                    'summary': self._generate_burst_story_summary(burst_emails),
+                    'summary': summarize_cluster_emails(burst_emails, context="burst on " + burst_date.strftime('%Y-%m-%d')),
                     'timeline': burst_emails[['date', 'from', 'to', 'subject']].to_dict('records'),
                     'importance_score': len(burst_emails) * 1.2
                 }
@@ -535,6 +536,47 @@ class EfficientEnronAnalyzer:
 
         return summary.strip()
 
+summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+
+def summarize_cluster_emails(email_subset, context="event"):
+    """Batch-safe summarizer for email clusters using DistilBART"""
+    if email_subset.empty:
+        return "No emails to summarize."
+
+    # Combine subject + summary for each email
+    texts = []
+    for _, row in email_subset.iterrows():
+        subject = row['subject'] if isinstance(row['subject'], str) else ''
+        summary = row['summary'] if isinstance(row['summary'], str) else ''
+        combined = f"Subject: {subject}. Summary: {summary}"
+        texts.append(combined)
+
+    # Break into chunks to avoid token limit overflow
+    chunks = []
+    current_chunk = ""
+    for entry in texts:
+        if len((current_chunk + entry).split()) < 700:
+            current_chunk += "\n" + entry
+        else:
+            chunks.append(current_chunk)
+            current_chunk = entry
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    # Summarize each chunk separately
+    summaries = []
+    for i, chunk in enumerate(chunks):
+        prompt = (
+            f"The following are internal email messages related to {context}. "
+            f"Summarize them clearly and cohesively:\n\n{chunk}"
+        )
+        try:
+            result = summarizer(prompt, max_length=300, min_length=80, do_sample=False)
+            summaries.append(f"🧩 Part {i+1}:\n{result[0]['summary_text']}")
+        except Exception as e:
+            summaries.append(f"❌ Error summarizing part {i+1}: {str(e)}")
+
+    return "📘 Summary:\n" + "\n\n".join(summaries)
 
 def main():
     st.markdown('<h1 class="main-header">📧 Efficient Enron Email Analysis</h1>', unsafe_allow_html=True)
