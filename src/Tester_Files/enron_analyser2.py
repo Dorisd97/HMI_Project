@@ -8,6 +8,28 @@ import numpy as np
 from collections import Counter, defaultdict
 import networkx as nx
 import requests
+import os
+
+STORY_CACHE_FILE = "D:\Projects\HMI\HMI_Project\data\cached_stories.json"
+
+def save_stories_to_cache(stories):
+    try:
+        with open(STORY_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(stories, f, indent=2, default=str)
+        return True
+    except Exception as e:
+        st.error(f"Failed to save cache: {e}")
+        return False
+
+def load_stories_from_cache():
+    try:
+        if os.path.exists(STORY_CACHE_FILE):
+            with open(STORY_CACHE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        st.warning(f"Could not load cached stories: {e}")
+    return None
+
 
 # ================== OLLAMA SUMMARIZER FOR BURST STORIES ====================
 
@@ -420,13 +442,23 @@ def main():
         st.header("📁 Data Upload")
         uploaded_file = st.file_uploader("Upload JSON email data", type=['json'])
 
+        # Clear cache button
+        # if st.button("🧹 Clear Cache"):
+        #     if os.path.exists(STORY_CACHE_FILE):
+        #         os.remove(STORY_CACHE_FILE)
+        #         st.success("🗑️ Cached stories removed.")
+
         if uploaded_file:
             if analyzer.load_data(uploaded_file):
                 st.success(f"✅ Loaded {len(analyzer.emails)} emails")
 
                 if st.button("🚀 Generate Analysis", type="primary"):
                     with st.spinner("Analyzing emails..."):
-                        stories = analyzer.generate_stories_efficiently()
+                        stories = load_stories_from_cache()
+                        if stories is None:
+                            stories = analyzer.generate_stories_efficiently()
+                            save_stories_to_cache(stories)
+                    analyzer.stories = stories
                     st.success("✨ Analysis complete!")
 
     if analyzer.emails is not None:
