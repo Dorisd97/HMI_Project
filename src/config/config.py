@@ -21,6 +21,7 @@ CLUSTERING_RESULTS_DIR = os.path.join(BASE_DIR, 'data', 'clustering_results')
 CLUSTER_STORIES_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'cluster_stories.json')
 EMAILS_WITH_CLUSTERS_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'emails_with_clusters.csv')
 CLUSTER_SUMMARY_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'cluster_summary.json')
+STORY_CACHE_FILE = os.path.join(CLUSTERING_RESULTS_DIR, 'cached_stories.json')
 
 # Clustering Parameters
 CLUSTERING_CONFIG = {
