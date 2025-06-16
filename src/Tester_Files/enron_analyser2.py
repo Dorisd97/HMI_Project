@@ -84,6 +84,37 @@ def summarize_cluster_emails(email_subset, context="event"):
 
     return "📘 Summary:\n" + "\n\n".join(summaries)
 
+# ================== Narrative Story Generator ====================
+
+def generate_narrative_from_summary():
+    stories = load_stories_from_cache()
+    if not stories:
+        st.warning("No cached stories to update.")
+        return
+
+    updated_stories = []
+    for story in stories:
+        if story.get("summary", "").startswith("📘 Summary:"):
+            parts = story['summary'].split("🧩 Part")
+            email_parts = ["🧩 Part" + p for p in parts[1:]]
+            combined_text = "\n\n".join(email_parts)
+            prompt = (
+                f"You are a journalist. Based on the following internal summaries, write a coherent story "
+                f"with key events, people, and outcomes. Write in chronological order:\n\n{combined_text}\n\nWrite the full story:"
+            )
+            narrative = summarize_with_ollama(prompt).strip()
+            story['narrative_story'] = narrative
+        else:
+            story['narrative_story'] = story.get('summary', '')
+
+        if not story.get("title"):
+            story['title'] = "Untitled Story"
+
+        updated_stories.append(story)
+
+    if save_stories_to_cache(updated_stories):
+        st.success("✅ Narrative stories added to cache.")
+
 # =================== STREAMLIT PAGE CONFIG/CSS ======================
 
 st.set_page_config(
@@ -460,6 +491,9 @@ def main():
                             save_stories_to_cache(stories)
                     analyzer.stories = stories
                     st.success("✨ Analysis complete!")
+                if st.button("🧠 Generate Narrative from Cache"):
+                    with st.spinner("Generating narrative story using Mistral..."):
+                        generate_narrative_from_summary()
 
     if analyzer.emails is not None:
         # Main tabs
@@ -519,7 +553,7 @@ def main():
                         st.metric("👥 Participants", len(story['participants']))
                     with col3:
                         st.metric("📅 Duration", f"{story['duration_days']} days")
-                    st.write("**Summary:**", story['summary'])
+                    st.write("**Narrative Story:**", story.get('narrative_story', story['summary']))
                     with st.expander("View Details"):
                         st.write("**Organizations Involved:**", ', '.join(story['organizations'][:5]))
                         st.write("**Timeline Sample:**")
