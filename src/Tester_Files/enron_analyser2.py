@@ -133,11 +133,19 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     .story-card {
-        background-color: #14de17;
+        background-color: #1e1f28; /* Dark gray */
+        color: #f4f4f4; /* Light text */
         padding: 1.5rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #1f77b4;
-        margin: 1rem 0;
+        border-radius: 0.75rem;
+        border-left: 6px solid #42a5f5; /* Soft blue accent */
+        margin: 1.5rem 0;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+    .story-card h3 {
+        color: #90caf9;
+    }
+    .story-card p {
+        color: #dddddd;
     }
     .metric-card {
         background-color: #f0f2f6;
