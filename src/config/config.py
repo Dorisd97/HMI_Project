@@ -15,6 +15,7 @@ EXTRACTED_ENTITIES_JSON_PATH = os.path.join(BASE_DIR, 'data', 'enron_entities.js
 MODEL_PATH = os.path.join(BASE_DIR, 'models', 'final-model.pt')
 CLEANED_BODYCHAIN_JSON_PATH = os.path.join(BASE_DIR, 'data', 'cleaned_body_chain_enron.json')
 PROCESSED_JSON_OUTPUT = os.path.join(BASE_DIR, 'data', 'enron_full_analysis_results.json')
+PROCESSED_JSON_OUTPUT_100 = os.path.join(BASE_DIR, 'data', 'enron_full_analysis_results_100.json')
 
 # Clustering and Analysis Paths
 CLUSTERING_RESULTS_DIR = os.path.join(BASE_DIR, 'data', 'clustering_results')
