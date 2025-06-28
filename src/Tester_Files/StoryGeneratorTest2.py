@@ -18,7 +18,7 @@ import argparse
 from tqdm import tqdm
 import hashlib
 
-from src.config.config import PROCESSED_JSON_OUTPUT_100
+from src.config.config import PROCESSED_JSON_OUTPUT, PROCESSED_JSON_OUTPUT_100
 
 
 class EnronLLMProcessor:
@@ -299,7 +299,9 @@ class EnronLLMProcessor:
         email_analyses = []
 
         # Select important emails for analysis
-        important_emails = self.select_important_emails(50)
+        # important_emails = self.select_important_emails(len(self.emails))
+
+        important_emails = self.emails
 
         for email in tqdm(important_emails, desc="Analyzing emails"):
             analysis = self.analyze_individual_email(email)
@@ -432,7 +434,7 @@ def main():
     #     print(f"Error: Input file '{args.input}' not found!")
     #     return
 
-    output_dir = "enron_analysis_output"
+    output_dir = "enron_analysis_output_1"
 
     # Run processor with config-based path
     processor = EnronLLMProcessor(email_data_path=PROCESSED_JSON_OUTPUT_100, output_dir=output_dir)
