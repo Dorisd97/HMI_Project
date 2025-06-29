@@ -19,26 +19,53 @@ with open(input_path, 'r', encoding='utf-8') as f:
 emails = data.get("emails", [])
 
 # Step 2: Prepare summaries for LLM
-email_summaries = "\n\n".join(
-    [f"Subject: {email['subject']}\nSummary: {email['summary']}" for email in emails]
-)
+email_summaries = "\n\n".join([
+    f"""
+📧 Email ID: {email.get('id', 'N/A')}
+🗓 Date: {email.get('date', 'N/A')}
+👤 From: {email.get('sender', 'Unknown')}
+🏷 Subject: {email.get('subject', 'No Subject')}
+📑 Summary: {email.get('summary', 'No Summary')}
+🧠 Tone: {email.get('tone_analysis', 'N/A')}
+📂 Classification: {email.get('classification', 'N/A')}
+🔍 Entities:
+  - People: {', '.join(email.get('entities', {}).get('people', []))}
+  - Organizations: {', '.join(email.get('entities', {}).get('organizations', []))}
+  - Locations: {', '.join(email.get('entities', {}).get('locations', []))}
+  - Dates: {', '.join(email.get('entities', {}).get('dates', []))}
+  - Projects: {', '.join(email.get('entities', {}).get('projects', []))}
+  - Legal: {', '.join(email.get('entities', {}).get('legal', []))}
+  - Topics: {', '.join(email.get('entities', {}).get('topics', []))}
+""".strip()
+for email in emails
+])
 
 # Step 3: Create LLM prompt
 prompt = f"""
-You are an investigative journalist AI with access to internal corporate emails.
+You are an expert AI narrative analyst.
 
-Analyze the following email summaries and:
-1. Identify the central *theme* (e.g., energy crisis, corporate fraud, market manipulation, merger conflict).
-2. Write a coherent story narrative (200-300 words) about this theme using the provided email content.
+You will be given summaries of internal corporate emails. Each includes:
+- Metadata like sender, subject, tone, classification
+- Extracted entity mentions (people, organizations, topics, legal, projects)
+- Summarized content
 
-Email Summaries:
-{email_summaries}
+🧩 Your task:
+1. Analyze the combined dataset for patterns and context clues.
+2. Infer the **dominant theme** across the emails (e.g., "Energy crisis and regulatory backlash", "Fraudulent accounting practices").
+3. Write a **coherent, investigative-style story** (~200–300 words) about that theme, supported by events, tone, legal concerns, and involved people or organizations.
 
-Return a JSON object like:
+📛 Important:
+- Do not invent information outside what is present in summaries or entities.
+- Focus on internal operations, decisions, and consequences.
+
+🎯 Final output must be a valid JSON like this:
 {{
-  "theme": "energy crisis and regulatory backlash",
-  "story": "..."
+  "theme": "Energy crisis and SEC investigation",
+  "story": "Your detailed narrative goes here. It should feel like a compelling, fact-based summary of the situation described in the emails."
 }}
+
+Here are the emails:
+{email_summaries}
 """
 
 # Step 4: Run Ollama LLM (Mistral)
