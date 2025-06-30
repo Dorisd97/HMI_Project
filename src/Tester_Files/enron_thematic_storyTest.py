@@ -151,7 +151,7 @@ class EnronThematicAnalyzer:
             email_details.append(email_detail)
 
         prompt = f"""
-        Based on the identified themes and email details below, map each email to relevant themes.
+        Based on the identified themes and email details below, map EVERY email to its most relevant theme(s).
 
         THEMES IDENTIFIED:
         {themes_analysis}
@@ -159,19 +159,29 @@ class EnronThematicAnalyzer:
         EMAIL DETAILS:
         {json.dumps(email_details, indent=2)}
 
-        For each major theme, identify which emails support it and explain why.
+        For EACH of the 7 major themes, identify ALL emails that support it:
+        1. Corporate Mergers and Acquisitions
+        2. Financial Irregularities and Accounting Issues  
+        3. Regulatory Battles and Legal Troubles
+        4. Energy Market Manipulation
+        5. Business Operations and Trading
+        6. Corporate Culture and Internal Dynamics
+        7. Crisis Management and Bankruptcy
 
-        Format your response as JSON-like structure:
+        Look for keywords like: Dynegy, merger, LJM, Chewco, SEC, FERC, bankruptcy, trading, etc.
+
+        Format response as:
         {{
             "theme_mappings": {{
-                "Theme Name 1": {{
-                    "email_ids": [1, 5, 10],
-                    "explanation": "Brief explanation of how these emails support this theme"
+                "Corporate Mergers and Acquisitions": {{
+                    "email_ids": [list all relevant email IDs],
+                    "explanation": "How these emails relate to mergers/acquisitions"
                 }},
-                "Theme Name 2": {{
-                    "email_ids": [2, 7, 15],
-                    "explanation": "Brief explanation"
+                "Financial Irregularities and Accounting Issues": {{
+                    "email_ids": [list all relevant email IDs],
+                    "explanation": "How these emails show financial problems"
                 }}
+                // Continue for all 7 themes
             }}
         }}
         """
