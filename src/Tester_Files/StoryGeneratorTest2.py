@@ -434,10 +434,10 @@ def main():
     #     print(f"Error: Input file '{args.input}' not found!")
     #     return
 
-    output_dir = "enron_analysis_output_1"
+    output_dir = "enron_analysis_output"
 
     # Run processor with config-based path
-    processor = EnronLLMProcessor(email_data_path=PROCESSED_JSON_OUTPUT_100, output_dir=output_dir)
+    processor = EnronLLMProcessor(email_data_path=PROCESSED_JSON_OUTPUT, output_dir=output_dir)
     processor.process_all()
 
 
