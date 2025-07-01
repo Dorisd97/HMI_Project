@@ -97,24 +97,37 @@ class EnronThematicAnalyzer:
         Analyze the following Enron email dataset and identify the major thematic stories present. 
         Look for recurring patterns, narratives, and connections between emails.
 
-        Email Data:
-        {json.dumps(email_summaries[:20], indent=2)}  # Limit to avoid token limits
+        Be sure to identify the following themes and provide detailed explanations:
 
-        Please identify and describe 6-8 major thematic stories/narratives such as:
-        1. Corporate mergers and acquisitions
-        2. Financial irregularities and accounting issues
-        3. Regulatory battles and legal troubles
-        4. Energy market manipulation
-        5. Business operations and trading
-        6. Corporate culture and internal dynamics
-        7. Crisis management and bankruptcy
+        1. The Dynegy Merger Saga
+           - Look for initial merger announcements, discussions about leadership transitions, technical details about stock exchanges, and the eventual collapse of the merger deal.
+           - What were the key turning points that led to the failure of this merger?
 
-        For each theme, provide:
-        - Theme name
-        - Brief description
-        - Key characteristics to look for in emails
+        2. California Energy Crisis and Market Manipulation
+           - Look for references to the California energy crisis, such as Governor Gray Davis' demand for refunds, price manipulation investigations, and FERC interventions.
+           - How did Enron attempt to manipulate energy prices during this time?
 
-        Format as a clear, structured response.
+        3. Financial Engineering and Special Purpose Entities
+           - Identify emails referencing special purpose entities, off-balance-sheet transactions, and LJM partnerships.
+           - Look for financial strategies that were used to hide debt and manipulate financial reports.
+
+        4. The Unraveling and Bankruptcy
+           - Trace the sequence of events that led to Enron's bankruptcy filing, starting from early signs of financial distress to the eventual Chapter 11 filing.
+           - Look for emails discussing SEC investigations, asset auctions, and creditor negotiations.
+
+        5. Regulatory and Legal Battles
+           - Identify emails mentioning FERC proceedings, subpoenas, and legal challenges Enron faced.
+           - What were the major legal battles that played a role in Enron's collapse?
+
+        6. Energy Trading Operations
+           - Look for discussions on Enron's energy trading operations, risk management, and mark-to-market accounting practices.
+           - What were the key events related to energy trading that affected Enron's financial health?
+
+        7. Corporate Culture and Internal Dynamics
+           - Look for emails that describe internal office politics, restructuring efforts, and the company's corporate culture.
+           - How did these internal dynamics contribute to Enron's downfall?
+
+        Please provide a detailed description of each theme, along with key characteristics, references to specific emails, and an explanation of how they relate to the overall Enron story.
         """
 
         response = self.call_ollama(prompt)
@@ -151,39 +164,20 @@ class EnronThematicAnalyzer:
             email_details.append(email_detail)
 
         prompt = f"""
-        Based on the identified themes and email details below, map EVERY email to its most relevant theme(s).
+        Map every email in the provided dataset to one of the identified themes from the previous analysis. 
 
-        THEMES IDENTIFIED:
-        {themes_analysis}
+        Use the following themes:
+        1. Dynegy Merger Saga
+        2. California Energy Crisis and Market Manipulation
+        3. Financial Engineering and Special Purpose Entities
+        4. The Unraveling and Bankruptcy
+        5. Regulatory and Legal Battles
+        6. Energy Trading Operations
+        7. Corporate Culture and Internal Dynamics
 
-        EMAIL DETAILS:
-        {json.dumps(email_details, indent=2)}
-
-        For EACH of the 7 major themes, identify ALL emails that support it:
-        1. Corporate Mergers and Acquisitions
-        2. Financial Irregularities and Accounting Issues  
-        3. Regulatory Battles and Legal Troubles
-        4. Energy Market Manipulation
-        5. Business Operations and Trading
-        6. Corporate Culture and Internal Dynamics
-        7. Crisis Management and Bankruptcy
-
-        Look for keywords like: Dynegy, merger, LJM, Chewco, SEC, FERC, bankruptcy, trading, etc.
-
-        Format response as:
-        {{
-            "theme_mappings": {{
-                "Corporate Mergers and Acquisitions": {{
-                    "email_ids": [list all relevant email IDs],
-                    "explanation": "How these emails relate to mergers/acquisitions"
-                }},
-                "Financial Irregularities and Accounting Issues": {{
-                    "email_ids": [list all relevant email IDs],
-                    "explanation": "How these emails show financial problems"
-                }}
-                // Continue for all 7 themes
-            }}
-        }}
+        For each email, please provide:
+        - A clear identification of the theme(s) that the email belongs to.
+        - A brief explanation of why this email is relevant to the identified theme(s).
         """
 
         response = self.call_ollama(prompt)
@@ -259,22 +253,20 @@ class EnronThematicAnalyzer:
             })
 
         prompt = f"""
-        Based on this chronological email data and theme mappings, create a narrative timeline 
-        showing how the Enron story unfolds.
+        Generate a chronological narrative timeline based on the provided email data and themes.
 
-        TIMELINE DATA:
-        {json.dumps(timeline_data, indent=2)}
-
-        THEME MAPPINGS:
-        {json.dumps(theme_mapping, indent=2)}
-
-        Create a narrative with these sections:
+        Ensure the timeline is broken down into distinct phases:
         1. Early Operations (normal business)
         2. Growing Problems (regulatory issues, investigations)
         3. Crisis Phase (mergers, financial troubles)
         4. Collapse (bankruptcy, legal consequences)
 
-        Write a coherent story showing the progression from normal operations to crisis.
+        For each phase, provide:
+        - Key emails from the dataset that represent the phase.
+        - A brief description of the events happening during this phase.
+        - The connection to the broader narrative, showing how the emails build upon each other.
+
+        Please provide the narrative in a structured format, detailing how Enron's situation evolved from normal business operations to eventual bankruptcy.
         """
 
         return self.call_ollama(prompt)
