@@ -9,8 +9,12 @@ from collections import Counter, defaultdict
 import networkx as nx
 import requests
 import os
+from src.config.config import PROCESSED_JSON_OUTPUT, CACHED_STORIES_PATH
 
-STORY_CACHE_FILE = "D:\Projects\HMI\HMI_Project\data\cached_stories.json"
+# ====== CONFIGURATION ======
+INPUT_FILE_PATH = PROCESSED_JSON_OUTPUT  # Input file patH
+
+STORY_CACHE_FILE = CACHED_STORIES_PATH
 
 def save_stories_to_cache(stories):
     try:
@@ -164,20 +168,20 @@ class EfficientEnronAnalyzer:
         self.stories = None
         self.entity_graph = None
 
-    def load_data(self, uploaded_file):
+    def load_data(self, file_path):
         """Load email data from JSON file"""
         try:
-            if uploaded_file is not None:
-                data = json.load(uploaded_file)
-                if isinstance(data, list):
-                    self.emails = pd.DataFrame(data)
-                else:
-                    self.emails = pd.DataFrame([data])
-                self.emails['date'] = pd.to_datetime(self.emails['date'], format='%d.%m.%Y %H:%M:%S')
-                self._extract_all_entities()
-                return True
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                self.emails = pd.DataFrame(data)
+            else:
+                self.emails = pd.DataFrame([data])
+            self.emails['date'] = pd.to_datetime(self.emails['date'], format='%d.%m.%Y %H:%M:%S')
+            self._extract_all_entities()
+            return True
         except Exception as e:
-            st.error(f"Error loading data: {str(e)}")
+            st.error(f"Error loading data from {file_path}: {str(e)}")
             return False
 
     def _extract_all_entities(self):
@@ -476,32 +480,25 @@ def main():
 
     analyzer = EfficientEnronAnalyzer()
 
-    # Sidebar
-    with st.sidebar:
-        st.header("📁 Data Upload")
-        uploaded_file = st.file_uploader("Upload JSON email data", type=['json'])
+    if analyzer.load_data(INPUT_FILE_PATH):
+        st.success(f"✅ Loaded {len(analyzer.emails)} emails from default path.")
 
-        # Clear cache button
-        # if st.button("🧹 Clear Cache"):
-        #     if os.path.exists(STORY_CACHE_FILE):
-        #         os.remove(STORY_CACHE_FILE)
-        #         st.success("🗑️ Cached stories removed.")
+        stories = load_stories_from_cache()
+        if stories:
+            st.info("📂 Loaded stories with narratives.")
+        else:
+            st.warning("🛠️ Running full analysis...")
+            with st.spinner("Generating stories and narrative summaries..."):
+                stories = analyzer.generate_stories_efficiently()
+                save_stories_to_cache(stories)
+                generate_narrative_from_summary()
+                stories = load_stories_from_cache()
 
-        if uploaded_file:
-            if analyzer.load_data(uploaded_file):
-                st.success(f"✅ Loaded {len(analyzer.emails)} emails")
+        analyzer.stories = stories
+        st.success("✨ Stories ready!")
 
-                if st.button("🚀 Generate Analysis", type="primary"):
-                    with st.spinner("Analyzing emails..."):
-                        stories = load_stories_from_cache()
-                        if stories is None:
-                            stories = analyzer.generate_stories_efficiently()
-                            save_stories_to_cache(stories)
-                    analyzer.stories = stories
-                    st.success("✨ Analysis complete!")
-                if st.button("🧠 Generate Narrative from Cache"):
-                    with st.spinner("Generating narrative story using Mistral..."):
-                        generate_narrative_from_summary()
+    else:
+        st.error(f"❌ Failed to load emails from {INPUT_FILE_PATH}")
 
     if analyzer.emails is not None:
         # Main tabs
