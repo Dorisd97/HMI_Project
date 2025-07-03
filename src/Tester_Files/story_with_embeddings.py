@@ -8,10 +8,10 @@ import hdbscan
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
-from src.config.config import PROCESSED_JSON_OUTPUT_100
+from src.config.config import PROCESSED_JSON_OUTPUT
 
 # ================= CONFIG ===================
-INPUT_FILE = PROCESSED_JSON_OUTPUT_100
+INPUT_FILE = PROCESSED_JSON_OUTPUT
 OLLAMA_URL = "http://localhost:11434"
 MODEL_NAME = "mistral"
 MAX_EMAILS_PER_CLUSTER = 5
@@ -20,9 +20,20 @@ MAX_EMAILS_PER_CLUSTER = 5
 def load_emails(path):
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    if "emails" not in data:
-        raise KeyError("JSON file must contain 'emails' key. Found keys: " + ", ".join(data.keys()))
-    return data["emails"]
+
+    if isinstance(data, list):
+        return data
+    elif isinstance(data, dict):
+        # case 1: JSON contains "emails" list
+        if "emails" in data:
+            return data["emails"]
+        # case 2: JSON is a single email dictionary
+        elif "subject" in data and "summary" in data:
+            return [data]
+        else:
+            raise ValueError("Unknown email structure in JSON dict.")
+    else:
+        raise ValueError("Invalid JSON structure — must be a dict or list.")
 
 def parse_date(date_str):
     try:
