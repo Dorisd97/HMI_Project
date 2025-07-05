@@ -14,12 +14,12 @@ import hdbscan
 
 import os
 
-STORY_CACHE_FILE = "D:\Projects\HMI\HMI_Project\data\cached_stories_clustering.json"
+CACHED_CLUSTER_STORIES = "D:\Projects\HMI\HMI_Project\data\cached_stories_clustering.json"
 
 
 def save_stories_to_cache(stories):
     try:
-        with open(STORY_CACHE_FILE, 'w', encoding='utf-8') as f:
+        with open(CACHED_CLUSTER_STORIES, 'w', encoding='utf-8') as f:
             json.dump(stories, f, indent=2, default=str)
         return True
     except Exception as e:
@@ -29,8 +29,8 @@ def save_stories_to_cache(stories):
 
 def load_stories_from_cache():
     try:
-        if os.path.exists(STORY_CACHE_FILE):
-            with open(STORY_CACHE_FILE, 'r', encoding='utf-8') as f:
+        if os.path.exists(CACHED_CLUSTER_STORIES):
+            with open(CACHED_CLUSTER_STORIES, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
         st.warning(f"Could not load cached stories: {e}")
@@ -523,8 +523,8 @@ def main():
 
         # Clear cache button
         # if st.button("🧹 Clear Cache"):
-        #     if os.path.exists(STORY_CACHE_FILE):
-        #         os.remove(STORY_CACHE_FILE)
+        #     if os.path.exists(CACHED_CLUSTER_STORIES):
+        #         os.remove(CACHED_CLUSTER_STORIES)
         #         st.success("🗑️ Cached stories removed.")
 
         if uploaded_file:
