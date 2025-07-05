@@ -1,3 +1,4 @@
+
 import json
 import requests
 from collections import defaultdict
@@ -40,11 +41,11 @@ def generate_embeddings(emails):
 def cluster_embeddings(embeddings):
     reducer = umap.UMAP(n_neighbors=30, min_dist=0.4, metric='cosine')
     reduced = reducer.fit_transform(embeddings)
-    clusterer = hdbscan.HDBSCAN(min_cluster_size=25, metric='euclidean')
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=10, metric='euclidean')
     labels = clusterer.fit_predict(reduced)
     return reduced, labels
 
-# ============ Cluster Merging (Optional) ==============
+# ============ Cluster Merging ==============
 def merge_similar_clusters(cluster_dict, embeddings_dict):
     cluster_keys = list(cluster_dict.keys())
     merged = {}
@@ -57,9 +58,7 @@ def merge_similar_clusters(cluster_dict, embeddings_dict):
         for k2 in cluster_keys[i+1:]:
             if k2 in merged_keys:
                 continue
-            sim = cosine_similarity(
-                [embeddings_dict[k1]], [embeddings_dict[k2]]
-            )[0][0]
+            sim = cosine_similarity([embeddings_dict[k1]], [embeddings_dict[k2]])[0][0]
             if sim > CLUSTER_SIMILARITY_THRESHOLD:
                 merged[k1].extend(cluster_dict[k2])
                 merged_keys.add(k2)
@@ -82,22 +81,27 @@ def generate_theme_story(theme_title, cluster_emails):
     email_blocks = "\n\n".join([
         f"Subject: {e['subject']}\nSummary: {e['summary']}" for e in cluster_emails
     ])
-    prompt = f'''
-You are an investigative journalist analyzing a collection of internal Enron emails.
-Write a detailed, narrative-style report about the central financial, political, or legal issue reflected in these emails.
+    prompt = f"""
+You are an analyst reviewing a cluster of Enron emails. For the cluster below, generate:
 
-Focus on:
-- Event chronology
-- Key individuals and companies
-- Market or regulatory impact
-- Broader implications
+1. "title": A compelling, informative title for the story.
+2. "actors": A list of the key people or organizations involved in this theme.
+3. "content": A short narrative (300–500 words) that explains what happened, when, and why it matters.
 
 Emails:
 {email_blocks}
 
-Conclude with a reflective summary about the consequences of these actions.
-'''
-    return query_ollama(prompt)
+Format your response as JSON with keys: "title", "actors", and "content".
+"""
+    response = query_ollama(prompt)
+    try:
+        return json.loads(response)
+    except Exception:
+        return {
+            "title": f"{theme_title} (Parse Error)",
+            "actors": [],
+            "content": response
+        }
 
 # ============ Main ==============
 def main():
@@ -120,19 +124,20 @@ def main():
 
     merged_clusters = merge_similar_clusters(cluster_dict, embeddings_dict)
 
-    theme_stories = {}
-    for i, (label, cluster_emails) in enumerate(merged_clusters.items()):
-        selected = sorted(cluster_emails, key=lambda e: parse_date(e.get("date", "")))[:MAX_EMAILS_PER_CLUSTER]
-        theme = f"MajorTheme-{i}"
-        print(f"🧠 Generating story for {theme} with {len(selected)} emails...")
-        story = generate_theme_story(theme, selected)
-        theme_stories[theme] = story
-
+    story_json_list = []
     with open("thematic_stories_output.txt", "w", encoding="utf-8") as f:
-        for theme, story in theme_stories.items():
-            f.write(f"📚 {theme}\n{'='*60}\n{story}\n\n\n")
+        for i, (label, cluster_emails) in enumerate(merged_clusters.items()):
+            selected = sorted(cluster_emails, key=lambda e: parse_date(e.get("date", "")))[:MAX_EMAILS_PER_CLUSTER]
+            theme = f"MajorTheme-{i}"
+            print(f"🧠 Generating story for {theme} with {len(selected)} emails...")
+            story = generate_theme_story(theme, selected)
+            story_json_list.append(story)
+            f.write(f"📚 {story['title']}\n{'='*60}\nActors: {', '.join(story['actors'])}\n\n{story['content']}\n\n\n")
 
-    print("✅ Saved condensed thematic stories to 'thematic_stories_output.txt'")
+    with open("structured_thematic_stories.json", "w", encoding="utf-8") as jf:
+        json.dump(story_json_list, jf, indent=2)
+
+    print("✅ Saved both structured JSON and text summaries.")
 
 if __name__ == "__main__":
     main()

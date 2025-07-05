@@ -17,7 +17,9 @@ PROCESSED_JSON_OUTPUT = os.path.join(BASE_DIR, 'data', 'enron_full_analysis_resu
 PROCESSED_JSON_OUTPUT_100 = os.path.join(BASE_DIR, 'data', 'enron_full_analysis_results_100.json')
 GENERATED_THEME_STORY_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'generated_thematic_story.json')
 GENERATED_THEME_STORY_PATH2 = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'enron_thematic_analysis_output1.json')
+GENERATED_THEME_FULL_STORY_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'thematic_stories_full_output.txt')
 CACHED_STORIES_PATH = os.path.join(BASE_DIR, 'data', 'cached_stories.json')
+COMBINED_THEMATIC_STORIES_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'combined_thematic_stories.json')
 
 # Clustering and Analysis Paths
 CLUSTERING_RESULTS_DIR = os.path.join(BASE_DIR, 'data', 'clustering_results')
