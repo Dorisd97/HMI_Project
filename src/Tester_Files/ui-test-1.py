@@ -1,11 +1,18 @@
 import streamlit as st
 import json
 import pandas as pd
+from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import re
 from collections import Counter
 import networkx as nx
+import plotly.figure_factory as ff
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
 
 from src.config.config import THEMATIC_STORIES, CACHED_CLUSTER_STORIES, CACHED_STORIES_PATH
 
@@ -117,27 +124,44 @@ def create_timeline_chart(activity_data):
         if item['type'] == 'activity_burst':
             date_range = item.get('date_range', [])
             if len(date_range) >= 2:
-                start_date = pd.to_datetime(date_range[0])
-                end_date = pd.to_datetime(date_range[1])
-                timeline_data.append({
-                    'Date': start_date,
-                    'Event': item['title'],
-                    'Email_Count': item['email_count'],
-                    'Duration': item.get('duration_days', 1)
-                })
+                try:
+                    start_date = pd.to_datetime(date_range[0])
+                    end_date = pd.to_datetime(date_range[1])
+                    timeline_data.append({
+                        'Date': start_date,
+                        'Event': item['title'],
+                        'Email_Count': item['email_count'],
+                        'Duration': item.get('duration_days', 1)
+                    })
+                except Exception as e:
+                    # Skip invalid dates
+                    continue
 
     if not timeline_data:
         return None
 
     df = pd.DataFrame(timeline_data)
 
-    fig = px.scatter(df, x='Date', y='Email_Count',
-                     size='Duration', hover_data=['Event'],
-                     title='Enron Email Activity Timeline',
-                     labels={'Email_Count': 'Number of Emails'})
+    # Create the plot with error handling
+    try:
+        fig = px.scatter(df, x='Date', y='Email_Count',
+                         size='Duration', hover_data=['Event'],
+                         title='Enron Email Activity Timeline',
+                         labels={'Email_Count': 'Number of Emails'})
 
-    fig.update_layout(height=400)
-    return fig
+        fig.update_layout(height=400)
+        return fig
+    except Exception as e:
+        # Fallback to bar chart if scatter fails
+        try:
+            fig = px.bar(df, x='Date', y='Email_Count',
+                         hover_data=['Event', 'Duration'],
+                         title='Enron Email Activity Timeline',
+                         labels={'Email_Count': 'Number of Emails'})
+            fig.update_layout(height=400)
+            return fig
+        except Exception:
+            return None
 
 
 def create_network_graph(cluster_stories):
@@ -215,8 +239,7 @@ def create_network_graph(cluster_stories):
 
     fig = go.Figure(data=[edge_trace, node_trace],
                     layout=go.Layout(
-                        title='Organization Network',
-                        titlefont_size=16,
+                        title=dict(text='Organization Network', font_size=16),
                         showlegend=False,
                         hovermode='closest',
                         margin=dict(b=20, l=5, r=5, t=40),
@@ -230,6 +253,145 @@ def create_network_graph(cluster_stories):
                         )],
                         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)))
+
+    return fig
+
+
+def create_cluster_network_graph(cluster_story):
+    """Create network graph for a specific cluster story"""
+    if not cluster_story:
+        return None
+
+    summary = cluster_story.get('summary', '')
+    title = cluster_story.get('title', '')
+
+    # Extract entities from both summary and title
+    text = f"{title} {summary}"
+
+    # Enhanced entity extraction
+    # Companies (often have Corp, Inc, LLC, Company, etc.)
+    companies = re.findall(
+        r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*(?:\s+(?:Corp|Corporation|Inc|LLC|Company|Co\.|Ltd|Limited|Energy|Power|Gas|Electric|Trading))\b',
+        text)
+
+    # General entities (capitalized words/phrases)
+    entities = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*){0,2}\b', text)
+
+    # Combine and filter entities
+    all_entities = list(set(companies + entities))
+
+    # Filter out common words that aren't entities
+    stop_words = {'The', 'This', 'That', 'These', 'Those', 'A', 'An', 'And', 'Or', 'But', 'In', 'On', 'At', 'To', 'For',
+                  'Of', 'With', 'By', 'From', 'About', 'Into', 'Through', 'During', 'Before', 'After', 'Above', 'Below',
+                  'Up', 'Down', 'Out', 'Off', 'Over', 'Under', 'Again', 'Further', 'Then', 'Once', 'Here', 'There',
+                  'When', 'Where', 'Why', 'How', 'All', 'Any', 'Both', 'Each', 'Few', 'More', 'Most', 'Other', 'Some',
+                  'Such', 'No', 'Nor', 'Not', 'Only', 'Own', 'Same', 'So', 'Than', 'Too', 'Very', 'Can', 'Will', 'Just',
+                  'Should', 'Now'}
+
+    filtered_entities = [entity for entity in all_entities if entity not in stop_words and len(entity) > 2]
+
+    # Take top entities by frequency
+    entity_counts = Counter(filtered_entities)
+    top_entities = dict(entity_counts.most_common(15))  # Limit to 15 for readability
+
+    if len(top_entities) < 2:
+        return None
+
+    # Create network graph
+    G = nx.Graph()
+
+    # Add nodes
+    for entity, count in top_entities.items():
+        G.add_node(entity, size=count * 5)  # Scale for visualization
+
+    # Add edges based on co-occurrence in sentences
+    sentences = re.split(r'[.!?]+', text)
+    entity_list = list(top_entities.keys())
+
+    for sentence in sentences:
+        entities_in_sentence = [entity for entity in entity_list if entity.lower() in sentence.lower()]
+        # Create edges between entities that appear in the same sentence
+        for i, entity1 in enumerate(entities_in_sentence):
+            for entity2 in entities_in_sentence[i + 1:]:
+                if G.has_edge(entity1, entity2):
+                    G[entity1][entity2]['weight'] += 1
+                else:
+                    G.add_edge(entity1, entity2, weight=1)
+
+    if len(G.nodes()) == 0:
+        return None
+
+    # Create plotly network graph
+    try:
+        pos = nx.spring_layout(G, k=2, iterations=50)
+    except:
+        pos = nx.random_layout(G)
+
+    # Create edges
+    edge_x = []
+    edge_y = []
+    edge_weights = []
+
+    for edge in G.edges():
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+        weight = G[edge[0]][edge[1]].get('weight', 1)
+        edge_weights.extend([weight, weight, None])
+
+    edge_trace = go.Scatter(x=edge_x, y=edge_y,
+                            line=dict(width=0.5, color='#888'),
+                            hoverinfo='none',
+                            mode='lines')
+
+    # Create nodes
+    node_x = []
+    node_y = []
+    node_text = []
+    node_size = []
+    node_info = []
+
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_text.append(node)
+        size = G.nodes[node].get('size', 10)
+        node_size.append(max(size, 10))  # Minimum size
+
+        # Node info for hover
+        adjacencies = list(G.neighbors(node))
+        node_info.append(f'{node}<br>Connections: {len(adjacencies)}<br>Mentions: {top_entities.get(node, 1)}')
+
+    node_trace = go.Scatter(x=node_x, y=node_y,
+                            mode='markers+text',
+                            text=node_text,
+                            textposition="middle center",
+                            hoverinfo='text',
+                            hovertext=node_info,
+                            marker=dict(size=node_size,
+                                        color='lightblue',
+                                        line=dict(width=2, color='darkblue')))
+
+    fig = go.Figure(data=[edge_trace, node_trace],
+                    layout=go.Layout(
+                        title=dict(text=f'Entity Network for Cluster {cluster_story.get("cluster_id", "")}',
+                                   font_size=14),
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=20, l=5, r=5, t=40),
+                        annotations=[dict(
+                            text="Entities and their relationships in this cluster",
+                            showarrow=False,
+                            xref="paper", yref="paper",
+                            x=0.005, y=-0.002,
+                            xanchor="left", yanchor="bottom",
+                            font=dict(color="grey", size=10)
+                        )],
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        height=400))
 
     return fig
 
@@ -445,6 +607,54 @@ def main():
             # Extract key metrics from summary
             summary_words = len(cluster['summary'].split())
             st.metric("Summary Length", f"{summary_words} words")
+
+        # Network Graph for this specific cluster
+        st.markdown("---")
+        st.subheader("🌐 Entity Network for This Cluster")
+        cluster_network_fig = create_cluster_network_graph(cluster)
+        if cluster_network_fig:
+            st.plotly_chart(cluster_network_fig, use_container_width=True)
+
+            # Entity analysis for this cluster
+            with st.expander("📊 Entity Analysis Details"):
+                summary = cluster.get('summary', '')
+                title = cluster.get('title', '')
+                text = f"{title} {summary}"
+
+                # Extract and display entities
+                companies = re.findall(
+                    r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*(?:\s+(?:Corp|Corporation|Inc|LLC|Company|Co\.|Ltd|Limited|Energy|Power|Gas|Electric|Trading))\b',
+                    text)
+                entities = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*){0,2}\b', text)
+
+                all_entities = list(set(companies + entities))
+                stop_words = {'The', 'This', 'That', 'These', 'Those', 'A', 'An', 'And', 'Or', 'But', 'In', 'On', 'At',
+                              'To', 'For', 'Of', 'With', 'By', 'From', 'About', 'Into', 'Through', 'During', 'Before',
+                              'After', 'Above', 'Below', 'Up', 'Down', 'Out', 'Off', 'Over', 'Under', 'Again',
+                              'Further', 'Then', 'Once', 'Here', 'There', 'When', 'Where', 'Why', 'How', 'All', 'Any',
+                              'Both', 'Each', 'Few', 'More', 'Most', 'Other', 'Some', 'Such', 'No', 'Nor', 'Not',
+                              'Only', 'Own', 'Same', 'So', 'Than', 'Too', 'Very', 'Can', 'Will', 'Just', 'Should',
+                              'Now'}
+                filtered_entities = [entity for entity in all_entities if entity not in stop_words and len(entity) > 2]
+
+                entity_counts = Counter(filtered_entities)
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Companies Mentioned:**")
+                    company_counts = Counter(companies)
+                    for company, count in company_counts.most_common(10):
+                        st.write(f"• {company} ({count} times)")
+
+                with col2:
+                    st.markdown("**Key Entities:**")
+                    for entity, count in entity_counts.most_common(10):
+                        if entity not in companies:
+                            st.write(f"• {entity} ({count} times)")
+        else:
+            st.info("Unable to generate network graph for this cluster - insufficient entity relationships found.")
+
+        st.markdown("---")
 
         # Cluster analysis
         st.subheader("📊 Cluster Statistics")
