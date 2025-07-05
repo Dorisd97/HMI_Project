@@ -20,6 +20,7 @@ GENERATED_THEME_STORY_PATH2 = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'enr
 GENERATED_THEME_FULL_STORY_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'thematic_stories_full_output.txt')
 CACHED_STORIES_PATH = os.path.join(BASE_DIR, 'data', 'cached_stories.json')
 COMBINED_THEMATIC_STORIES_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'combined_thematic_stories.json')
+COMBINED_THEMES_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'combined_themes.json')
 
 # Clustering and Analysis Paths
 CLUSTERING_RESULTS_DIR = os.path.join(BASE_DIR, 'data', 'clustering_results')
