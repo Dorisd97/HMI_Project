@@ -53,6 +53,7 @@ Your task is to:
 Here are the themes:
 {theme_summaries}
 """
+
     response = ollama.chat(
         model='mistral',
         messages=[
@@ -63,13 +64,17 @@ Here are the themes:
 
     raw_text = response['message']['content']
 
-    # Extract just the JSON part using a regex
+    # Print the raw response for debugging
+    print("\n🔍 Raw Mistral Response:\n" + "-" * 50)
+    print(raw_text)
+    print("-" * 50)
+
+    # Try extracting the JSON block
     json_match = re.search(r"(\[\s*{.*?}\s*\])", raw_text, re.DOTALL)
     if not json_match:
         raise ValueError("Could not find JSON array in Mistral response.")
 
-    json_data = json.loads(json_match.group(1))
-    return json_data
+    return json.loads(json_match.group(1))
 
 
 # Step 3: Match theme IDs back to full content and structure final JSON
