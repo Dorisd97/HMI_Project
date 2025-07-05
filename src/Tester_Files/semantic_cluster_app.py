@@ -12,15 +12,16 @@ import requests
 import sys
 import numpy as np
 
+from src.config.config import PROCESSED_JSON_OUTPUT,CACHED_CLUSTER_STORIES,EMBEDDING_CACHE_FILE
+
 # Add config import
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from src.config import config
 os.environ["STREAMLIT_WATCH_USE_POLLING"] = "true"
 
 # === CONFIGURATION ===
-INPUT_JSON_PATH = config.PROCESSED_JSON_OUTPUT
-STORY_CACHE_FILE = "cached_cluster_stories.json"
-EMBEDDING_CACHE_FILE = "cached_embeddings.npy"
+INPUT_JSON_PATH = PROCESSED_JSON_OUTPUT
+CACHED_CLUSTER_STORIES = CACHED_CLUSTER_STORIES
+EMBEDDING_CACHE_FILE = EMBEDDING_CACHE_FILE
 
 st.set_page_config(page_title="Semantic Clustering of Emails", layout="wide")
 st.title("📧 Semantic Clustering and Storytelling for Emails")
@@ -139,13 +140,13 @@ def generate_cluster_summaries(df):
             'summary': summary
         })
 
-    with open(STORY_CACHE_FILE, 'w', encoding='utf-8') as f:
+    with open(CACHED_CLUSTER_STORIES, 'w', encoding='utf-8') as f:
         json.dump(summaries, f, indent=2)
     return summaries
 
 def load_cached_summaries():
-    if os.path.exists(STORY_CACHE_FILE):
-        with open(STORY_CACHE_FILE, 'r', encoding='utf-8') as f:
+    if os.path.exists(CACHED_CLUSTER_STORIES):
+        with open(CACHED_CLUSTER_STORIES, 'r', encoding='utf-8') as f:
             return json.load(f)
     return None
 
@@ -168,7 +169,7 @@ st.subheader("📘 Cluster Titles + Stories")
 
 # === Load or Generate Summaries ===
 try:
-    if os.path.exists(STORY_CACHE_FILE):
+    if os.path.exists(CACHED_CLUSTER_STORIES):
         summaries = load_cached_summaries()
         st.info("📂 Loaded from cached cluster summaries.")
     else:

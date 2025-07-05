@@ -18,20 +18,7 @@ PROCESSED_JSON_OUTPUT_100 = os.path.join(BASE_DIR, 'data', 'enron_full_analysis_
 GENERATED_THEME_STORY_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'generated_thematic_story.json')
 GENERATED_THEME_STORY_PATH2 = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'enron_thematic_analysis_output1.json')
 CACHED_STORIES_PATH = os.path.join(BASE_DIR, 'data', 'cached_stories.json')
+EMBEDDING_CACHE_FILE = os.path.join(BASE_DIR, 'data', 'cached_embeddings.npy')
+CACHED_CLUSTER_STORIES =  os.path.join(BASE_DIR, 'data', 'cached_cluster_stories.json')
+THEMATIC_STORIES =  os.path.join(BASE_DIR, 'data', 'thematic_stories_output.txt')
 
-# Clustering and Analysis Paths
-CLUSTERING_RESULTS_DIR = os.path.join(BASE_DIR, 'data', 'clustering_results')
-CLUSTER_STORIES_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'cluster_stories.json')
-EMAILS_WITH_CLUSTERS_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'emails_with_clusters.csv')
-CLUSTER_SUMMARY_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'cluster_summary.json')
-STORY_CACHE_FILE = os.path.join(CLUSTERING_RESULTS_DIR, 'cached_stories.json')
-
-# Clustering Parameters
-CLUSTERING_CONFIG = {
-    'eps': 0.3,
-    'min_samples': 5,
-    'top_n_clusters': 5,
-    'text_field': 'Body',  # Adjust based on your JSON structure
-    'max_features': 1000,
-    'ngram_range': (1, 2)
-}

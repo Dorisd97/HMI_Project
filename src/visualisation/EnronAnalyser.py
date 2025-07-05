@@ -14,11 +14,11 @@ from src.config.config import PROCESSED_JSON_OUTPUT, CACHED_STORIES_PATH
 # ====== CONFIGURATION ======
 INPUT_FILE_PATH = PROCESSED_JSON_OUTPUT  # Input file patH
 
-STORY_CACHE_FILE = CACHED_STORIES_PATH
+CACHED_CLUSTER_STORIES = CACHED_STORIES_PATH
 
 def save_stories_to_cache(stories):
     try:
-        with open(STORY_CACHE_FILE, 'w', encoding='utf-8') as f:
+        with open(CACHED_CLUSTER_STORIES, 'w', encoding='utf-8') as f:
             json.dump(stories, f, indent=2, default=str)
         return True
     except Exception as e:
@@ -27,8 +27,8 @@ def save_stories_to_cache(stories):
 
 def load_stories_from_cache():
     try:
-        if os.path.exists(STORY_CACHE_FILE):
-            with open(STORY_CACHE_FILE, 'r', encoding='utf-8') as f:
+        if os.path.exists(CACHED_CLUSTER_STORIES):
+            with open(CACHED_CLUSTER_STORIES, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
         st.warning(f"Could not load cached stories: {e}")

@@ -1,0 +1,618 @@
+import streamlit as st
+import json
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import re
+from collections import Counter
+import networkx as nx
+
+from src.config.config import THEMATIC_STORIES, CACHED_CLUSTER_STORIES, CACHED_STORIES_PATH
+
+# Page configuration
+st.set_page_config(
+    page_title="Enron Email Analysis Dashboard",
+    page_icon="📧",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 3rem;
+        font-weight: bold;
+        text-align: center;
+        color: #1f77b4;
+        margin-bottom: 2rem;
+    }
+    .story-card {
+        background-color: #f8f9fa;
+        border-left: 4px solid #1f77b4;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 0.5rem;
+    }
+    .metric-card {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .sidebar-section {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+@st.cache_data
+def load_data():
+    """Load all data files"""
+    try:
+        # Load thematic stories (main focus)
+        with open(THEMATIC_STORIES, 'r', encoding='utf-8') as f:
+            thematic_content = f.read()
+
+        # Load cluster stories
+        with open(CACHED_CLUSTER_STORIES, 'r', encoding='utf-8') as f:
+            cluster_stories = json.load(f)
+
+        # Load activity burst data
+        with open(CACHED_STORIES_PATH, 'r', encoding='utf-8') as f:
+            activity_data = json.load(f)
+
+        return thematic_content, cluster_stories, activity_data
+    except FileNotFoundError as e:
+        st.error(f"File not found: {e}")
+        return None, None, None
+
+
+def parse_thematic_stories(content):
+    """Parse thematic stories from text content"""
+    stories = []
+
+    # Split by theme markers
+    theme_sections = content.split('📚 Theme-')[1:]  # Skip the first empty split
+
+    for section in theme_sections:
+        lines = section.strip().split('\n')
+        if len(lines) < 2:
+            continue
+
+        # Extract theme number
+        theme_num = lines[0].split('\n')[0].strip()
+
+        # Extract title
+        title_line = next((line for line in lines if line.startswith(' Title:')), '')
+        title = title_line.replace(' Title:', '').strip() if title_line else f"Theme {theme_num}"
+
+        # Extract content
+        content_start = next((i for i, line in enumerate(lines) if 'Title:' in line), 0) + 1
+        story_content = '\n'.join(lines[content_start:]).strip()
+
+        stories.append({
+            'theme_number': theme_num,
+            'title': title,
+            'content': story_content
+        })
+
+    return stories
+
+
+def create_timeline_chart(activity_data):
+    """Create timeline visualization"""
+    if not activity_data:
+        return None
+
+    # Extract timeline data from activity burst
+    timeline_data = []
+    for item in activity_data:
+        if item['type'] == 'activity_burst':
+            date_range = item.get('date_range', [])
+            if len(date_range) >= 2:
+                start_date = pd.to_datetime(date_range[0])
+                end_date = pd.to_datetime(date_range[1])
+                timeline_data.append({
+                    'Date': start_date,
+                    'Event': item['title'],
+                    'Email_Count': item['email_count'],
+                    'Duration': item.get('duration_days', 1)
+                })
+
+    if not timeline_data:
+        return None
+
+    df = pd.DataFrame(timeline_data)
+
+    fig = px.scatter(df, x='Date', y='Email_Count',
+                     size='Duration', hover_data=['Event'],
+                     title='Enron Email Activity Timeline',
+                     labels={'Email_Count': 'Number of Emails'})
+
+    fig.update_layout(height=400)
+    return fig
+
+
+def create_network_graph(cluster_stories):
+    """Create network graph of organizations"""
+    if not cluster_stories:
+        return None
+
+    # Extract organizations from cluster stories
+    all_orgs = []
+    for story in cluster_stories:
+        summary = story.get('summary', '')
+        # Simple extraction of organization names (can be improved)
+        org_mentions = re.findall(r'\b[A-Z][a-z]*(?:\s+[A-Z][a-z]*)*\b', summary)
+        all_orgs.extend(org_mentions)
+
+    # Count organization mentions
+    org_counts = Counter(all_orgs)
+    top_orgs = dict(org_counts.most_common(20))
+
+    # Create network graph
+    G = nx.Graph()
+    for org, count in top_orgs.items():
+        G.add_node(org, size=count)
+
+    # Add edges between frequently co-mentioned organizations
+    org_list = list(top_orgs.keys())
+    for i, org1 in enumerate(org_list):
+        for org2 in org_list[i + 1:]:
+            # Simple co-occurrence check
+            co_occurrence = sum(1 for story in cluster_stories
+                                if org1.lower() in story.get('summary', '').lower()
+                                and org2.lower() in story.get('summary', '').lower())
+            if co_occurrence > 1:
+                G.add_edge(org1, org2, weight=co_occurrence)
+
+    if len(G.nodes()) == 0:
+        return None
+
+    # Create plotly network graph
+    pos = nx.spring_layout(G, k=1, iterations=50)
+
+    edge_x = []
+    edge_y = []
+    for edge in G.edges():
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+
+    edge_trace = go.Scatter(x=edge_x, y=edge_y,
+                            line=dict(width=0.5, color='#888'),
+                            hoverinfo='none',
+                            mode='lines')
+
+    node_x = []
+    node_y = []
+    node_text = []
+    node_size = []
+
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_text.append(node)
+        node_size.append(G.nodes[node].get('size', 1) * 2)
+
+    node_trace = go.Scatter(x=node_x, y=node_y,
+                            mode='markers+text',
+                            text=node_text,
+                            textposition="middle center",
+                            hoverinfo='text',
+                            marker=dict(size=node_size,
+                                        color='lightblue',
+                                        line=dict(width=2, color='darkblue')))
+
+    fig = go.Figure(data=[edge_trace, node_trace],
+                    layout=go.Layout(
+                        title='Organization Network',
+                        titlefont_size=16,
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=20, l=5, r=5, t=40),
+                        annotations=[dict(
+                            text="Network of organizations mentioned in Enron emails",
+                            showarrow=False,
+                            xref="paper", yref="paper",
+                            x=0.005, y=-0.002,
+                            xanchor="left", yanchor="bottom",
+                            font=dict(color="grey", size=12)
+                        )],
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)))
+
+    return fig
+
+
+def main():
+    # Header
+    st.markdown('<h1 class="main-header">📧 Enron Email Analysis Dashboard</h1>', unsafe_allow_html=True)
+
+    # Load data
+    thematic_content, cluster_stories, activity_data = load_data()
+
+    if not thematic_content:
+        st.error("Unable to load data files. Please ensure all files are in the correct location.")
+        return
+
+    # Parse thematic stories
+    thematic_stories = parse_thematic_stories(thematic_content)
+
+    # Sidebar
+    st.sidebar.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+    st.sidebar.title("📊 Navigation")
+
+    # Main navigation
+    main_tab = st.sidebar.radio(
+        "Choose Analysis Type:",
+        ["🏠 Overview", "📚 Thematic Stories", "🔍 Cluster Analysis", "📈 Activity Patterns", "🌐 Network Analysis"]
+    )
+    st.sidebar.markdown('</div>', unsafe_allow_html=True)
+
+    # Overview Tab
+    if main_tab == "🏠 Overview":
+        st.header("📋 Dataset Overview")
+
+        # Metrics
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Thematic Stories", len(thematic_stories))
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col2:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Cluster Stories", len(cluster_stories) if cluster_stories else 0)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col3:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            total_emails = sum(story.get('email_count', 0) for story in cluster_stories) if cluster_stories else 0
+            st.metric("Total Emails Analyzed", total_emails)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col4:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            activity_items = len(activity_data) if activity_data else 0
+            st.metric("Activity Patterns", activity_items)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Timeline chart
+        st.subheader("📅 Email Activity Timeline")
+        timeline_fig = create_timeline_chart(activity_data)
+        if timeline_fig:
+            st.plotly_chart(timeline_fig, use_container_width=True)
+        else:
+            st.info("Timeline data not available")
+
+        # Quick insights
+        st.subheader("🔍 Quick Insights")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Top Email Clusters by Volume")
+            if cluster_stories:
+                top_clusters = sorted(cluster_stories, key=lambda x: x.get('email_count', 0), reverse=True)[:5]
+                for i, cluster in enumerate(top_clusters, 1):
+                    st.write(f"{i}. **{cluster.get('title', 'Untitled')}** ({cluster.get('email_count', 0)} emails)")
+
+        with col2:
+            st.markdown("#### Thematic Story Categories")
+            if thematic_stories:
+                theme_keywords = []
+                for story in thematic_stories:
+                    title = story.get('title', '')
+                    # Extract key themes from titles
+                    if 'merger' in title.lower():
+                        theme_keywords.append('Mergers & Acquisitions')
+                    elif 'financial' in title.lower() or 'credit' in title.lower():
+                        theme_keywords.append('Financial Issues')
+                    elif 'settlement' in title.lower() or 'legal' in title.lower():
+                        theme_keywords.append('Legal Matters')
+                    elif 'gas' in title.lower() or 'power' in title.lower():
+                        theme_keywords.append('Energy Trading')
+                    else:
+                        theme_keywords.append('General Business')
+
+                theme_counts = Counter(theme_keywords)
+                for theme, count in theme_counts.most_common(5):
+                    st.write(f"• **{theme}**: {count} stories")
+
+    # Thematic Stories Tab (Main Focus)
+    elif main_tab == "📚 Thematic Stories":
+        st.header("📚 Thematic Story Analysis")
+        st.markdown("*Deep dive into the key narratives extracted from Enron email communications*")
+
+        # Search and filter
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            search_term = st.text_input("🔍 Search stories by keyword:", placeholder="e.g., Dynegy, merger, financial")
+        with col2:
+            sort_by = st.selectbox("Sort by:", ["Theme Number", "Title Length", "Alphabetical"])
+
+        # Filter stories
+        filtered_stories = thematic_stories
+        if search_term:
+            filtered_stories = [story for story in thematic_stories
+                                if search_term.lower() in story.get('title', '').lower()
+                                or search_term.lower() in story.get('content', '').lower()]
+
+        # Sort stories
+        if sort_by == "Theme Number":
+            filtered_stories = sorted(filtered_stories,
+                                      key=lambda x: int(x.get('theme_number', 0)) if x.get('theme_number',
+                                                                                           '').isdigit() else 0)
+        elif sort_by == "Title Length":
+            filtered_stories = sorted(filtered_stories, key=lambda x: len(x.get('title', '')), reverse=True)
+        else:  # Alphabetical
+            filtered_stories = sorted(filtered_stories, key=lambda x: x.get('title', ''))
+
+        # Story selection
+        if filtered_stories:
+            story_options = [f"Theme-{story['theme_number']}: {story['title']}" for story in filtered_stories]
+            selected_story_idx = st.selectbox("Select a story to read:", range(len(story_options)),
+                                              format_func=lambda x: story_options[x])
+
+            if selected_story_idx is not None:
+                story = filtered_stories[selected_story_idx]
+
+                # Display story
+                st.markdown('<div class="story-card">', unsafe_allow_html=True)
+                st.markdown(f"### 📚 Theme-{story['theme_number']}")
+                st.markdown(f"**{story['title']}**")
+                st.markdown("---")
+                st.markdown(story['content'])
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # Story analytics
+                with st.expander("📊 Story Analytics"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        word_count = len(story['content'].split())
+                        st.metric("Word Count", word_count)
+                    with col2:
+                        # Extract entities mentioned
+                        entities = re.findall(r'\b[A-Z][a-z]*(?:\s+[A-Z][a-z]*)*\b', story['content'])
+                        unique_entities = len(set(entities))
+                        st.metric("Entities Mentioned", unique_entities)
+                    with col3:
+                        # Extract dates mentioned
+                        dates = re.findall(r'\b\d{4}\b|\b\w+\s+\d{1,2},?\s+\d{4}\b', story['content'])
+                        st.metric("Dates Referenced", len(set(dates)))
+        else:
+            st.info("No stories found matching your search criteria.")
+
+        # Stories overview
+        st.subheader("📈 Stories Overview")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Theme distribution
+            theme_nums = [int(story['theme_number']) for story in thematic_stories if story['theme_number'].isdigit()]
+            if theme_nums:
+                fig = px.histogram(x=theme_nums, title="Distribution of Theme Numbers",
+                                   labels={'x': 'Theme Number', 'y': 'Count'})
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Story length distribution
+            story_lengths = [len(story['content'].split()) for story in thematic_stories]
+            fig = px.histogram(x=story_lengths, title="Story Length Distribution (Words)",
+                               labels={'x': 'Word Count', 'y': 'Number of Stories'})
+            st.plotly_chart(fig, use_container_width=True)
+
+    # Cluster Analysis Tab
+    elif main_tab == "🔍 Cluster Analysis":
+        st.header("🔍 Email Cluster Analysis")
+
+        if not cluster_stories:
+            st.error("Cluster data not available")
+            return
+
+        # Cluster selection
+        cluster_options = [f"Cluster {story['cluster_id']}: {story['title']}" for story in cluster_stories]
+        selected_cluster_idx = st.selectbox("Select a cluster:", range(len(cluster_options)),
+                                            format_func=lambda x: cluster_options[x])
+
+        cluster = cluster_stories[selected_cluster_idx]
+
+        # Display cluster details
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            st.markdown(f"### Cluster {cluster['cluster_id']}: {cluster['title']}")
+            st.markdown(f"**Email Count:** {cluster['email_count']}")
+            st.markdown("#### Summary")
+            st.markdown(cluster['summary'])
+
+        with col2:
+            st.markdown("#### Cluster Metrics")
+            st.metric("Email Volume", cluster['email_count'])
+
+            # Extract key metrics from summary
+            summary_words = len(cluster['summary'].split())
+            st.metric("Summary Length", f"{summary_words} words")
+
+        # Cluster analysis
+        st.subheader("📊 Cluster Statistics")
+
+        # Email count distribution
+        email_counts = [story['email_count'] for story in cluster_stories]
+        fig = px.box(y=email_counts, title="Email Count Distribution Across Clusters")
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Top clusters by email volume
+        st.subheader("🏆 Top Clusters by Email Volume")
+        top_clusters = sorted(cluster_stories, key=lambda x: x['email_count'], reverse=True)[:10]
+
+        df_top = pd.DataFrame([
+            {'Cluster': f"Cluster {c['cluster_id']}", 'Title': c['title'], 'Email Count': c['email_count']}
+            for c in top_clusters
+        ])
+
+        fig = px.bar(df_top, x='Email Count', y='Cluster', orientation='h',
+                     title="Top 10 Clusters by Email Volume",
+                     hover_data=['Title'])
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Activity Patterns Tab
+    elif main_tab == "📈 Activity Patterns":
+        st.header("📈 Email Activity Patterns")
+
+        if not activity_data:
+            st.error("Activity data not available")
+            return
+
+        # Activity burst analysis
+        activity_burst = next((item for item in activity_data if item['type'] == 'activity_burst'), None)
+
+        if activity_burst:
+            st.subheader(f"🚀 {activity_burst['title']}")
+
+            # Activity metrics
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Total Emails", activity_burst['email_count'])
+            with col2:
+                st.metric("Duration (Days)", activity_burst['duration_days'])
+            with col3:
+                participants = len(activity_burst.get('participants', []))
+                st.metric("Participants", participants)
+            with col4:
+                organizations = len(activity_burst.get('organizations', []))
+                st.metric("Organizations", organizations)
+
+            # Summary
+            st.markdown("#### Activity Summary")
+            st.markdown(activity_burst.get('summary', 'No summary available'))
+
+            # Timeline analysis
+            if 'timeline' in activity_burst:
+                st.subheader("📅 Detailed Timeline")
+                timeline_df = pd.DataFrame(activity_burst['timeline'])
+
+                if not timeline_df.empty:
+                    # Convert date column
+                    timeline_df['date'] = pd.to_datetime(timeline_df['date'])
+
+                    # Add a count column for visualization (each email = 1)
+                    timeline_df['email_count'] = 1
+
+                    # Check if we have the required columns
+                    required_cols = ['date', 'from']
+                    if all(col in timeline_df.columns for col in required_cols):
+                        # Timeline chart
+                        hover_data = ['subject'] if 'subject' in timeline_df.columns else None
+                        fig = px.scatter(timeline_df, x='date', y='from',
+                                         size='email_count',
+                                         hover_data=hover_data,
+                                         title="Email Timeline")
+                        fig.update_layout(height=600)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        # Fallback: simple timeline without size
+                        st.write("Timeline data structure:")
+                        st.dataframe(timeline_df.head())
+
+                        if 'date' in timeline_df.columns:
+                            # Group by date to show email frequency
+                            daily_counts = timeline_df.groupby(timeline_df['date'].dt.date).size().reset_index()
+                            daily_counts.columns = ['Date', 'Email_Count']
+
+                            fig = px.bar(daily_counts, x='Date', y='Email_Count',
+                                         title="Daily Email Volume")
+                            st.plotly_chart(fig, use_container_width=True)
+
+                    # Top senders
+                    st.subheader("👥 Top Email Senders")
+                    if 'from' in timeline_df.columns:
+                        sender_counts = timeline_df['from'].value_counts().head(10)
+                        if not sender_counts.empty:
+                            fig = px.bar(x=sender_counts.values, y=sender_counts.index,
+                                         orientation='h', title="Most Active Email Senders")
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.info("No sender data available")
+                    else:
+                        st.info("Sender information not available in timeline data")
+
+            # Organizations network
+            if activity_burst.get('organizations'):
+                st.subheader("🏢 Organizations Involved")
+                orgs = activity_burst['organizations']
+
+                # Create organization frequency chart
+                org_df = pd.DataFrame({'Organization': orgs})
+                org_counts = org_df['Organization'].value_counts().head(15)
+
+                fig = px.pie(values=org_counts.values, names=org_counts.index,
+                             title="Organization Mentions")
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No activity burst data available")
+
+    # Network Analysis Tab
+    elif main_tab == "🌐 Network Analysis":
+        st.header("🌐 Network Analysis")
+
+        # Organization network
+        st.subheader("🏢 Organization Network")
+        network_fig = create_network_graph(cluster_stories)
+        if network_fig:
+            st.plotly_chart(network_fig, use_container_width=True)
+        else:
+            st.info("Unable to generate network graph")
+
+        # Key players analysis
+        if cluster_stories:
+            st.subheader("👥 Key Players Analysis")
+
+            # Extract all organizations mentioned
+            all_orgs = []
+            for story in cluster_stories:
+                summary = story.get('summary', '')
+                orgs = re.findall(r'\b[A-Z][a-z]*(?:\s+[A-Z][a-z]*)*\b', summary)
+                all_orgs.extend(orgs)
+
+            org_counts = Counter(all_orgs)
+            top_orgs = org_counts.most_common(20)
+
+            if top_orgs:
+                df_orgs = pd.DataFrame(top_orgs, columns=['Organization', 'Mentions'])
+
+                fig = px.bar(df_orgs, x='Mentions', y='Organization',
+                             orientation='h', title="Most Mentioned Organizations")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Organization details
+                st.subheader("📊 Organization Details")
+                selected_org = st.selectbox("Select organization for details:",
+                                            [org for org, _ in top_orgs])
+
+                if selected_org:
+                    # Find stories mentioning this organization
+                    related_stories = [story for story in cluster_stories
+                                       if selected_org.lower() in story.get('summary', '').lower()]
+
+                    st.write(f"**{selected_org}** appears in {len(related_stories)} cluster summaries:")
+                    for story in related_stories[:5]:  # Show top 5
+                        st.write(f"• Cluster {story['cluster_id']}: {story['title']}")
+
+
+if __name__ == "__main__":
+    main()
