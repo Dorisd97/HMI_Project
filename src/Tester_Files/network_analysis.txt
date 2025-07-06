@@ -1,0 +1,41 @@
+🕸️ ENRON THEMATIC STORIES NETWORK ANALYSIS
+============================================================
+
+📊 NETWORK OVERVIEW
+Total Nodes: 1689
+Total Edges: 24351
+Network Density: 0.017
+Average Clustering: 0.236
+
+🎯 THEME ANALYSIS
+Total Themes: 391
+
+🔗 Most Connected Themes:
+ 1. Cluster 309 (23 emails, 282 connections)
+ 2. Analysis of Recent Developments in Energy Market Regulations (21 emails, 281 connections)
+ 3. Policy Changes and Market Regulations Discussed in Cluster 326 (13 emails, 276 connections)
+ 4. Interactions Between Dynegy, Enron, and FERC Regarding Jurisdiction and Press Releases (13 emails, 271 connections)
+ 5. Enron's Master Agreements and Trading Activities within Cluster 248 - July-October 2000 (16 emails, 271 connections)
+ 6. Cluster 182 (28 emails, 269 connections)
+ 7. Unresolved Issues in Cluster 361 Agreement between Nicor Energy, Kaztex, and Enron (5 emails, 262 connections)
+ 8. Phone Number Transition and Department Updates - Cluster 293 (9 emails, 260 connections)
+ 9. Investigation into Legal Status of Gas Companies Vis-à-vis California State (13 emails, 258 connections)
+10. Update on California Energy Crisis and Duke Energy Conference Call (24 emails, 257 connections)
+
+🏢 ENTITY ANALYSIS
+🔗 Most Connected Entities:
+ 1. Dynegy (74 theme connections)
+ 2. Additionally (61 theme connections)
+ 3. Cluster (34 theme connections)
+ 4. Enron (27 theme connections)
+ 5. California (22 theme connections)
+ 6. FERC (20 theme connections)
+ 7. They (15 theme connections)
+ 8. Topics (12 theme connections)
+ 9. ISO (11 theme connections)
+10. Updates (10 theme connections)
+11. Duke Energy (9 theme connections)
+12. September (9 theme connections)
+13. Analysis (8 theme connections)
+14. October (8 theme connections)
+15. Inc (8 theme connections)
