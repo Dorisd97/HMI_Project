@@ -1,54 +1,40 @@
-import re
 import json
+import re
 import ollama
-from src.config.config import GENERATED_THEME_FULL_STORY_PATH, COMBINED_THEMES_PATH
+from pathlib import Path
 
-INPUT_FILE = GENERATED_THEME_FULL_STORY_PATH
-OUTPUT_FILE = COMBINED_THEMES_PATH
+# File paths
+INPUT_FILE = "thematic_stories_full_output.json"
+OUTPUT_FILE = "combined_themes_output.json"
 
-
-# Step 1: Load and parse the .txt file
-def parse_themes(file_path):
+# Step 1: Load parsed JSON themes
+def load_json_themes(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    # Split on theme ID markers
-    theme_raw_blocks = re.split(r"\n📚\s+Theme-(\d+)", content)
-    stories = []
-
-    for i in range(1, len(theme_raw_blocks), 2):
-        theme_id = f"Theme-{theme_raw_blocks[i].strip()}"
-        block = theme_raw_blocks[i + 1].strip()
-        title_match = re.search(r"Title:\s*(.+)", block)
-        title = title_match.group(1).strip() if title_match else "Untitled"
-        stories.append({
-            "theme_id": theme_id,
-            "title": title,
-            "story": block
-        })
-
-    return stories
-
+        return json.load(f)
 
 # Step 2: Ask Mistral to group theme_ids and give a combined theme title for each group
 def ask_mistral_to_group_themes(stories):
     theme_summaries = "\n".join([f"{s['theme_id']}: {s['title']}" for s in stories])
     prompt = f"""
-You are an expert at identifying thematic similarities. Below is a list of themes from Enron's email dataset.
-Each line has a Theme-ID and its title.
+You are an expert at identifying thematic similarities in documents.
+
+You will receive a list of Enron themes in the format:
+Theme-ID: Title
 
 Your task is to:
-1. Group similar themes based on shared topic, actors, or situation.
-2. Give each group a short combined title.
-3. Return ONLY JSON like this:
+1. Group similar themes that are about the same topic or incident.
+2. Assign a short "combined_theme" title to each group.
+3. Return ONLY a JSON array in this format (wrapped in triple backticks):
 
 [
-  {{
-    "combined_theme": "Short title here",
-    "themes": ["Theme-230", "Theme-330", "Theme-358"]
-  }},
-  ...
+{{
+"combined_theme": "Short shared title",
+"themes": ["Theme-123", "Theme-456"]
+}},
+...
 ]
+
+⚠️ DO NOT write an essay. DO NOT explain anything. ONLY return the JSON inside triple backticks.
 
 Here are the themes:
 {theme_summaries}
@@ -57,27 +43,34 @@ Here are the themes:
     response = ollama.chat(
         model='mistral',
         messages=[
-            {"role": "system", "content": "You group and name related themes from email story titles."},
+            {"role": "system", "content": "You group related themes from email story titles and return clean JSON only."},
             {"role": "user", "content": prompt}
         ]
     )
 
     raw_text = response['message']['content']
 
-    # Print the raw response for debugging
     print("\n🔍 Raw Mistral Response:\n" + "-" * 50)
     print(raw_text)
     print("-" * 50)
 
-    # Try extracting the JSON block
+    # Optional: Save raw response for debugging
+    with open("raw_mistral_response.txt", "w", encoding="utf-8") as f:
+        f.write(raw_text)
+
+    # Try extracting from triple backticks
+    code_block_match = re.search(r"```(?:json)?\s*(\[\s*{.*?}\s*\])\s*```", raw_text, re.DOTALL)
+    if code_block_match:
+        return json.loads(code_block_match.group(1))
+
+    # Fallback: match plain JSON array
     json_match = re.search(r"(\[\s*{.*?}\s*\])", raw_text, re.DOTALL)
-    if not json_match:
-        raise ValueError("Could not find JSON array in Mistral response.")
+    if json_match:
+        return json.loads(json_match.group(1))
 
-    return json.loads(json_match.group(1))
+    raise ValueError("Could not find JSON array in Mistral response.")
 
-
-# Step 3: Match theme IDs back to full content and structure final JSON
+# Step 3: Build final structured output
 def build_grouped_json(grouped_ids, all_stories):
     story_dict = {s['theme_id']: s for s in all_stories}
 
@@ -97,19 +90,18 @@ def build_grouped_json(grouped_ids, all_stories):
         })
     return final_output
 
-
 # MAIN
 if __name__ == "__main__":
-    print("📘 Parsing .txt file...")
-    parsed_stories = parse_themes(INPUT_FILE)
+    print("📘 Loading thematic stories from JSON...")
+    parsed_stories = load_json_themes(INPUT_FILE)
 
     print("🧠 Asking Mistral to group related themes...")
     groupings = ask_mistral_to_group_themes(parsed_stories)
 
-    print("🧩 Building structured output...")
+    print("🧩 Building structured grouped output...")
     final_json = build_grouped_json(groupings, parsed_stories)
 
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(final_json, f, indent=2, ensure_ascii=False)
 
-    print(f"✅ Done! JSON saved to: {OUTPUT_FILE}")
+    print(f"✅ Done! Combined themes JSON saved to: {OUTPUT_FILE}")
