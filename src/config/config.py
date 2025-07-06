@@ -21,6 +21,7 @@ CACHED_STORIES_PATH = os.path.join(BASE_DIR, 'data', 'cached_stories.json')
 EMBEDDING_CACHE_FILE = os.path.join(BASE_DIR, 'data', 'cached_embeddings.npy')
 CACHED_CLUSTER_STORIES =  os.path.join(BASE_DIR, 'data', 'cached_cluster_stories.json')
 THEMATIC_STORIES =  os.path.join(BASE_DIR, 'data', 'thematic_stories_output.txt')
+PNG_IMAGE = os.path.join(BASE_DIR, 'assets', 'enron_logo.png')
 
 THEMATIC_STORIES_100 =  os.path.join(BASE_DIR, 'data', 'thematic_stories_output.txt')
 

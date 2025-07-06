@@ -1,0 +1,114 @@
+/* General App Styling for Light Theme */
+body {
+    color: #333333; /* Dark text for readability */
+    background-color: #F0F2F6; /* Light grey background */
+}
+
+/* Main content area */
+.main .block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+    padding-left: 5rem;
+    padding-right: 5rem;
+}
+
+/* Sidebar Styling */
+[data-testid="stSidebar"] {
+    background-color: #FFFFFF;
+    border-right: 1px solid #DDDDDD;
+}
+
+[data-testid="stSidebar"] h1 {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    color: #D55E00; /* A vibrant orange for the title */
+    text-align: center;
+    font-size: 28px;
+}
+
+[data-testid="stSidebar"] .st-emotion-cache-16txtl3 {
+    color: #333333;
+}
+
+/* Page Headers */
+h1, h2, h3 {
+    font-family: 'Georgia', serif;
+    color: #1a1a1a;
+    letter-spacing: 0.5px;
+}
+
+h1 {
+    border-bottom: 3px solid #0072B2; /* A nice blue accent */
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+h2 {
+    color: #D55E00;
+}
+
+/* Expander styling for "Conversation Dossiers" */
+[data-testid="stExpander"] {
+    border: 1px solid #dcdcdc;
+    border-radius: 8px;
+    background-color: #ffffff;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+[data-testid="stExpander"] summary {
+    background-color: #fafafa;
+    color: #333;
+    font-size: 1.1rem;
+    font-weight: 500;
+    border-radius: 8px 8px 0 0;
+}
+
+/* Metric styling */
+[data-testid="stMetric"] {
+    background-color: #FFFFFF;
+    border: 1px solid #dcdcdc;
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+}
+
+[data-testid="stMetric"] .st-emotion-cache-1g8_3rj {
+    color: #0072B2; /* Blue for the metric value */
+    font-weight: bold;
+}
+
+/* Storybook and Summary Boxes */
+.storybook-box, .summary-box {
+    background-color: #ffffff;
+    border-left: 6px solid #009E73; /* A nice green for emphasis */
+    padding: 20px;
+    margin-top: 15px;
+    border-radius: 5px;
+    font-family: 'Georgia', serif;
+    font-size: 1.1em;
+    line-height: 1.7;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+}
+
+.summary-box {
+    border-left-color: #D55E00; /* Orange for summaries */
+}
+
+/* Entity Highlighting in stories */
+.entity-highlight {
+    background-color: #FFDDC1; /* Light orange highlight */
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: bold;
+    color: #D55E00;
+}
+
+/* Tab styling */
+.st-emotion-cache-1sgoq9x p {
+    font-size: 1.1em;
+    font-weight: 500;
+}
+
+/* Radio button styling in sidebar */
+[data-testid="stRadio"] label {
+    font-size: 1.1rem !important;
+}
