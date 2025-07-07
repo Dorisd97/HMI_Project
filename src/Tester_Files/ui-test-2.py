@@ -256,7 +256,7 @@ def train_and_visualize_som(documents):
         win_map[winner].append(i)
 
     # --- FINAL FIX: Reduced the figure size for the SOM plot even further ---
-    fig, ax = plt.subplots(figsize=(6, 6))  # Changed from (8, 8) to (6, 6)
+    fig, ax = plt.subplots(figsize=(3, 3))  # Changed from (8, 8) to (6, 6)
 
     im = ax.pcolormesh(distance_map.T, cmap='bone_r')
     fig.colorbar(im, ax=ax)
