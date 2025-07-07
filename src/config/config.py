@@ -12,22 +12,18 @@ REFINED_JSON_PATH = os.path.join(BASE_DIR, 'data', 'refined_enron.json')
 CLEANED_JSON_PATH = os.path.join(BASE_DIR, 'data', 'cleaned_enron.json')
 EXTRACTED_ENTITIES_JSON_PATH = os.path.join(BASE_DIR, 'data', 'enron_entities.json')
 #BODY_CHAIN_OUTPUT_PATH = os.path.join(BASE_DIR, 'data', 'processed_body_chain_output.json')
-MODEL_PATH = os.path.join(BASE_DIR, 'models', 'final-model.pt')
 CLEANED_BODYCHAIN_JSON_PATH = os.path.join(BASE_DIR, 'data', 'cleaned_body_chain_enron.json')
 PROCESSED_JSON_OUTPUT = os.path.join(BASE_DIR, 'data', 'enron_full_analysis_results.json')
+PROCESSED_JSON_OUTPUT_100 = os.path.join(BASE_DIR, 'data', 'enron_full_analysis_results_100.json')
+GENERATED_THEME_STORY_PATH = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'generated_thematic_story.json')
+GENERATED_THEME_STORY_PATH2 = os.path.join(BASE_DIR, 'src', 'Tester_Files', 'enron_thematic_analysis_output1.json')
+CACHED_STORIES_PATH = os.path.join(BASE_DIR, 'data', 'cached_stories.json')
+EMBEDDING_CACHE_FILE = os.path.join(BASE_DIR, 'data', 'cached_embeddings.npy')
+CACHED_CLUSTER_STORIES =  os.path.join(BASE_DIR, 'data', 'cached_cluster_stories.json')
+THEMATIC_STORIES =  os.path.join(BASE_DIR, 'data', 'thematic_stories_output.txt')
+AI_SUMMARY =  os.path.join(BASE_DIR, 'data', 'ai_summary.txt')
+PNG_IMAGE = os.path.join(BASE_DIR, 'assets', 'enron_logo.png')
+PICKEL_FILE = os.path.join(BASE_DIR, 'data', 'preprocessed_ui')
 
-# Clustering and Analysis Paths
-CLUSTERING_RESULTS_DIR = os.path.join(BASE_DIR, 'data', 'clustering_results')
-CLUSTER_STORIES_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'cluster_stories.json')
-EMAILS_WITH_CLUSTERS_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'emails_with_clusters.csv')
-CLUSTER_SUMMARY_PATH = os.path.join(CLUSTERING_RESULTS_DIR, 'cluster_summary.json')
+THEMATIC_STORIES_100 =  os.path.join(BASE_DIR, 'data', 'thematic_stories_output.txt')
 
-# Clustering Parameters
-CLUSTERING_CONFIG = {
-    'eps': 0.3,
-    'min_samples': 5,
-    'top_n_clusters': 5,
-    'text_field': 'Body',  # Adjust based on your JSON structure
-    'max_features': 1000,
-    'ngram_range': (1, 2)
-}

@@ -12,13 +12,28 @@ from sklearn.decomposition import PCA
 
 import matplotlib.pyplot as plt
 
-# --- Helper functions ---
+# ---- LLM setup ----
+@st.cache_resource
+def load_llm(model_path: str, n_ctx=2048):
+    from llama_cpp import Llama
+    return Llama(model_path=model_path, n_ctx=n_ctx, n_threads=4)  # Set n_threads as per your CPU
+
+def generate_summary_llm(texts, llm, cluster_id=None, max_tokens=200):
+    # Concatenate up to 40 emails for summarization (to fit context)
+    sample = texts[:40] if len(texts) > 40 else texts
+    prompt = (
+        f"Summarize the following {len(sample)} email subjects and summaries "
+        "as a clear and concise paragraph that explains the main topics and purpose of this cluster:\n\n"
+        + "\n".join(sample)
+        + "\n\nSummary:"
+    )
+    out = llm(prompt, max_tokens=max_tokens, stop=["\n\n", "\nCluster"])
+    return out['choices'][0]['text'].strip()
+
+# ---- Helper functions ----
 
 @st.cache_data
 def load_subject_summary(file_bytes: bytes) -> pd.DataFrame:
-    """
-    Load only subject + summary from a JSON payload (as bytes).
-    """
     data = json.loads(file_bytes.decode('utf-8'))
     df = pd.DataFrame(data)
     df['subject'] = df.get('subject', '').fillna('')
@@ -28,9 +43,6 @@ def load_subject_summary(file_bytes: bytes) -> pd.DataFrame:
 
 @st.cache_data
 def vectorize(texts: pd.Series) -> Tuple[np.ndarray, TfidfVectorizer]:
-    """
-    Vectorize text using TF-IDF.
-    """
     vec = TfidfVectorizer(
         max_features=1000,
         stop_words='english',
@@ -40,26 +52,7 @@ def vectorize(texts: pd.Series) -> Tuple[np.ndarray, TfidfVectorizer]:
     )
     return vec.fit_transform(texts).toarray(), vec
 
-
-def generate_summary(text: str, sentence_count: int) -> str:
-    """
-    Naively split by sentence-ending punctuation and return the first N sentences.
-    """
-    # normalize whitespace
-    text = re.sub(r'\s+', ' ', text.strip())
-    # split into sentences
-    sents = re.split(r'(?<=[\.!?])\s+', text)
-    # filter out very short sentences
-    sents = [s for s in sents if len(s.split()) >= 3]
-    if not sents:
-        return "Not enough content to generate a summary."
-    return " ".join(sents[:sentence_count])
-
-
 def find_best_k(features: np.ndarray, k_min=2, k_max=10) -> int:
-    """
-    Determine optimal k by silhouette score, plotting scores for inspection.
-    """
     scores = []
     Ks = list(range(k_min, k_max + 1))
     for k in Ks:
@@ -74,18 +67,12 @@ def find_best_k(features: np.ndarray, k_min=2, k_max=10) -> int:
     st.pyplot(fig)
     return Ks[int(np.argmax(scores))]
 
-
 def run_kmeans(features: np.ndarray, k: int) -> Tuple[np.ndarray, KMeans]:
-    """
-    Fit K-Means and return labels and model.
-    """
     km = KMeans(n_clusters=k, random_state=42, n_init=10)
     labels = km.fit_predict(features)
     return labels, km
 
-
 def plot_clusters_2d(features: np.ndarray, labels: np.ndarray):
-    """Plot a 2D PCA projection of the clusters."""
     pca = PCA(n_components=2, random_state=42)
     pts = pca.fit_transform(features)
     fig, ax = plt.subplots()
@@ -95,19 +82,24 @@ def plot_clusters_2d(features: np.ndarray, labels: np.ndarray):
     ax.add_artist(legend1)
     st.pyplot(fig)
 
-
-# --- Streamlit app ---
+# ---- Streamlit App ----
 
 def main():
-    st.set_page_config(page_title="Subject+Summary Clustering & Summaries", layout="wide")
-    st.title("📧 Cluster on Subject & Summary + Cluster Summaries")
+    st.set_page_config(page_title="Subject+Summary Clustering & LLM Summaries", layout="wide")
+    st.title("📧 Email Clustering & LLM Summaries (Mistral)")
 
-    # Sidebar
-    st.sidebar.header("Configuration")
-    summary_sentences = st.sidebar.slider(
-        "Sentences per cluster summary", 1, 10, 3,
-        help="How many sentences to include in each cluster summary"
+    # ---- Model path config ----
+    st.sidebar.header("LLM Model")
+    model_path = st.sidebar.text_input(
+        "Path to Mistral .gguf model file",
+        value="mistral-7b-instruct-v0.2.Q4_K_M.gguf"
     )
+    if not model_path:
+        st.stop()
+    llm = load_llm(model_path)
+
+    # ---- Sidebar for config ----
+    st.sidebar.header("Clustering")
     k_manual = st.sidebar.checkbox("Pick k manually", value=False)
     if k_manual:
         manual_k = st.sidebar.slider("Number of clusters", 2, 20, 5)
@@ -123,11 +115,9 @@ def main():
     df = load_subject_summary(raw_bytes)
     st.write(f"Loaded **{len(df)}** emails.")
 
-    # Vectorize
     with st.spinner("Vectorizing text…"):
         X, vectorizer = vectorize(df['text'])
 
-    # Choose k
     if manual_k:
         k = manual_k
     else:
@@ -135,11 +125,9 @@ def main():
         k = find_best_k(X, k_min=2, k_max=12)
         st.success(f"→ Best k = **{k}**")
 
-    # Cluster
     labels, km_model = run_kmeans(X, k)
     df['cluster'] = labels
 
-    # Cluster sizes
     st.subheader("Cluster Sizes")
     size_df = (
         df['cluster'].value_counts().sort_index()
@@ -147,24 +135,22 @@ def main():
     )
     st.bar_chart(size_df.set_index('cluster'))
 
-    # 2D PCA
     st.subheader("2D PCA Plot of Clusters")
     plot_clusters_2d(X, labels)
 
-    # Sample assignments
     st.subheader("Sample Cluster Assignments")
     st.dataframe(df[['cluster','subject','summary']].head(10), use_container_width=True)
 
-    # Summaries per cluster
-    st.header("📖 Cluster Summaries")
+    # ---- Summaries per cluster with LLM ----
+    st.header("📖 LLM-generated Cluster Summaries")
     for cluster_id in sorted(df['cluster'].unique()):
         texts = df[df['cluster']==cluster_id]['text'].tolist()
-        combined = ' '.join(texts)
-        summary = generate_summary(combined, sentence_count=summary_sentences)
+        with st.spinner(f"Generating summary for Cluster {cluster_id}…"):
+            summary = generate_summary_llm(texts, llm, cluster_id=cluster_id)
         st.subheader(f"Cluster {cluster_id} Summary")
         st.write(summary)
 
-    # Keywords per cluster for quick topic sense
+    # ---- Keywords per cluster ----
     st.header("🔑 Cluster Keywords")
     feature_names = vectorizer.get_feature_names_out()
     centers = km_model.cluster_centers_
@@ -173,7 +159,6 @@ def main():
         keywords = [feature_names[idx] for idx in top_idxs]
         st.write(f"Cluster {i}: {', '.join(keywords)}")
 
-    # Download full assignments
     st.download_button(
         "Download full assignments as CSV",
         df.to_csv(index=False),
