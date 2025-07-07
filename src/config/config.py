@@ -23,6 +23,7 @@ CACHED_CLUSTER_STORIES =  os.path.join(BASE_DIR, 'data', 'cached_cluster_stories
 THEMATIC_STORIES =  os.path.join(BASE_DIR, 'data', 'thematic_stories_output.txt')
 AI_SUMMARY =  os.path.join(BASE_DIR, 'data', 'ai_summary.txt')
 PNG_IMAGE = os.path.join(BASE_DIR, 'assets', 'enron_logo.png')
+PICKEL_FILE = os.path.join(BASE_DIR, 'data', 'preprocessed_ui')
 
 THEMATIC_STORIES_100 =  os.path.join(BASE_DIR, 'data', 'thematic_stories_output.txt')
 
