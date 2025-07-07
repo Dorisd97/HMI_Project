@@ -13,16 +13,16 @@ import json
 
 from itertools import combinations
 
-from src.config.config import PNG_IMAGE, PICKEL_FILE, PROCESSED_JSON_OUTPUT, CACHED_CLUSTER_STORIES, THEMATIC_STORIES
+from src.config.config import ENRON_LOGO, PROCESSED_JSON_OUTPUT, CACHED_CLUSTER_STORIES, THEMATIC_STORIES, PICKLE_DIR
 
 # --- Configuration Setup ---
 # The original config import is commented out to make this script self-contained.
-# from src.config.config import PROCESSED_JSON_OUTPUT, PNG_IMAGE, PICKEL_FILE, THEMATIC_STORIES
+# from src.config.config import PROCESSED_JSON_OUTPUT, ENRON_LOGO, PICKEL_FILE, THEMATIC_STORIES
 
 # --- Paths are defined directly here. ---
 # Ensure these files are in the same directory as your script or provide the correct path.
-PNG_IMAGE = PNG_IMAGE  # A placeholder name for your logo image
-PICKLE_DIR = PICKEL_FILE  # Directory for .pkl files
+ENRON_LOGO = ENRON_LOGO  # A placeholder name for your logo image
+PICKLE_DIR = PICKLE_DIR  # Directory for .pkl files
 PROCESSED_JSON_OUTPUT = PROCESSED_JSON_OUTPUT  # Required for the Dashboard page
 # This JSON is the source for the new Network page and the AI Summary
 CACHED_CLUSTER_STORIES = CACHED_CLUSTER_STORIES
@@ -64,7 +64,7 @@ def local_css(file_name):
 
 
 # You can create a style.css file to customize further if needed
-# local_css("style.css")
+local_css("style.css")
 
 
 # --- DATA LOADING FUNCTIONS ---
@@ -323,8 +323,8 @@ def create_cooccurrence_heatmap(df, entity_type='organizations', top_n=15):
 
 
 # --- Sidebar ---
-if os.path.exists(PNG_IMAGE):
-    st.sidebar.image(PNG_IMAGE, use_container_width=True)
+if os.path.exists(ENRON_LOGO):
+    st.sidebar.image(ENRON_LOGO, use_container_width=True)
 st.sidebar.title("Navigation")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
