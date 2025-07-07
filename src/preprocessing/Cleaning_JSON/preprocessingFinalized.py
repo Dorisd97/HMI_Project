@@ -1,21 +1,21 @@
-import json
-import re
-import ollama
-from typing import Dict, List, Any
-from src.config import config
+import json  # Import JSON module for parsing and writing JSON data
+import re  # Import regex module for pattern matching
+import ollama  # Import Ollama for LLM interaction
+from typing import Dict, List, Any  # Import typing for type hints
+from src.config import config  # Import config for file paths
 
-INPUT_FILE = config.CLEANED_BODY_CHAIN_JSON_PATH
-OUTPUT_FILE = config.PROCESSED_JSON_OUTPUT
+INPUT_FILE = config.CLEANED_BODY_CHAIN_JSON_PATH  # Input JSON file path from config
+OUTPUT_FILE = config.PROCESSED_JSON_OUTPUT  # Output JSON file path from config
 MAX_EMAILS = 7220  # Process only first N emails
 BATCH_SIZE = 10  # Process emails in batches of N
 
 def extract_email_data(raw_content: str) -> List[Dict[str, Any]]:
     """Extract email data from raw JSON content"""
-    emails = []
+    emails = []  # Initialize list to hold emails
 
     # Try to parse as JSON first
     try:
-        data = json.loads(raw_content)
+        data = json.loads(raw_content)  # Attempt to load as JSON
         if isinstance(data, list):
             # If it's already a list of emails, extend with it
             emails.extend(data)
@@ -24,7 +24,7 @@ def extract_email_data(raw_content: str) -> List[Dict[str, Any]]:
             emails.append(data)
         return emails
     except json.JSONDecodeError:
-        pass
+        pass  # If JSON parsing fails, continue to regex extraction
 
     # Handle multiple emails or malformed JSON using regex
     email_patterns = {
@@ -39,9 +39,9 @@ def extract_email_data(raw_content: str) -> List[Dict[str, Any]]:
     message_ids = list(re.finditer(r'"Message-ID":\s*"([^"]+)"', raw_content))
 
     for i, match in enumerate(message_ids):
-        start_pos = match.start()
-        end_pos = message_ids[i + 1].start() if i + 1 < len(message_ids) else len(raw_content)
-        email_section = raw_content[start_pos:end_pos]
+        start_pos = match.start()  # Start of current email
+        end_pos = message_ids[i + 1].start() if i + 1 < len(message_ids) else len(raw_content)  # End of current email
+        email_section = raw_content[start_pos:end_pos]  # Extract section for one email
 
         email_data = {}
         for field, pattern in email_patterns.items():
@@ -56,9 +56,9 @@ def extract_email_data(raw_content: str) -> List[Dict[str, Any]]:
             bodychain_content = bodychain_match.group(1).replace('\\n', '\n').replace('\\"', '"')
             email_data['bodychain_content'] = bodychain_content
 
-        emails.append(email_data)
+        emails.append(email_data)  # Add extracted email data
 
-    return emails
+    return emails  # Return list of emails
 
 
 def query_mistral(prompt: str, model_name: str = "mistral") -> str:
@@ -68,10 +68,10 @@ def query_mistral(prompt: str, model_name: str = "mistral") -> str:
             model=model_name,
             messages=[{'role': 'user', 'content': prompt}]
         )
-        return response['message']['content'].strip()
+        return response['message']['content'].strip()  # Return the model's response
     except Exception as e:
         print(f"Error querying Mistral: {e}")
-        return ""
+        return ""  # Return empty string on error
 
 
 def analyze_summary(email_content: str) -> str:
@@ -84,7 +84,7 @@ def analyze_summary(email_content: str) -> str:
 
     Summary:
     """
-    return query_mistral(prompt)
+    return query_mistral(prompt)  # Query LLM for summary
 
 
 def analyze_tone(email_content: str) -> str:
@@ -102,7 +102,7 @@ def analyze_tone(email_content: str) -> str:
 
     Respond with just the tone category:
     """
-    return query_mistral(prompt)
+    return query_mistral(prompt)  # Query LLM for tone
 
 
 def classify_email(subject: str, content: str) -> str:
@@ -121,7 +121,7 @@ def classify_email(subject: str, content: str) -> str:
 
     Respond with just the classification:
     """
-    return query_mistral(prompt)
+    return query_mistral(prompt)  # Query LLM for classification
 
 
 def extract_entities(email_content: str) -> Dict[str, List[str]]:
@@ -144,7 +144,7 @@ def extract_entities(email_content: str) -> Dict[str, List[str]]:
     Return only the JSON object:
     """
 
-    response = query_mistral(prompt)
+    response = query_mistral(prompt)  # Query LLM for entities
 
     # Try to parse JSON response
     try:
@@ -392,16 +392,16 @@ def analyze_email(email_data: Dict[str, Any]) -> Dict[str, Any]:
     full_content = email_body + '\n\n' + bodychain_content
 
     print(f"  Generating summary...")
-    summary = analyze_summary(full_content)
+    summary = analyze_summary(full_content)  # Generate summary
 
     print(f"  Analyzing tone...")
-    tone = analyze_tone(full_content)
+    tone = analyze_tone(full_content)  # Analyze tone
 
     print(f"  Classifying email...")
-    classification = classify_email(email_subject, full_content)
+    classification = classify_email(email_subject, full_content)  # Classify email
 
     print(f"  Extracting entities...")
-    entities = extract_entities(full_content)
+    entities = extract_entities(full_content)  # Extract entities
 
     return {
         "to": email_to,
@@ -417,8 +417,8 @@ def analyze_email(email_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def main():
     """Main function"""
-    input_file = INPUT_FILE
-    output_file = OUTPUT_FILE
+    input_file = INPUT_FILE  # Get input file path
+    output_file = OUTPUT_FILE  # Get output file path
 
     print(f"Input file: {input_file}")
     print(f"Output file: {output_file}")
@@ -505,4 +505,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  # Run main if script is executed
