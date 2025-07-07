@@ -1,114 +1,128 @@
 /* General App Styling for Light Theme */
 body {
-    color: #333333; /* Dark text for readability */
-    background-color: #F0F2F6; /* Light grey background */
+    color: #212529;
+    background-color: #f8f9fa;
 }
 
 /* Main content area */
 .main .block-container {
     padding-top: 2rem;
-    padding-bottom: 2rem;
-    padding-left: 5rem;
-    padding-right: 5rem;
+    padding-bottom: 3rem;
+    padding-left: 4rem;
+    padding-right: 4rem;
 }
 
 /* Sidebar Styling */
 [data-testid="stSidebar"] {
-    background-color: #FFFFFF;
-    border-right: 1px solid #DDDDDD;
+    background-color: #ffffff;
+    border-right: 1px solid #dee2e6;
 }
 
 [data-testid="stSidebar"] h1 {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    color: #D55E00; /* A vibrant orange for the title */
+    color: #D55E00; /* Vibrant orange for the title */
     text-align: center;
-    font-size: 28px;
+    font-size: 26px;
+    font-weight: bold;
 }
 
 [data-testid="stSidebar"] .st-emotion-cache-16txtl3 {
-    color: #333333;
+    color: #495057;
 }
 
 /* Page Headers */
 h1, h2, h3 {
-    font-family: 'Georgia', serif;
-    color: #1a1a1a;
-    letter-spacing: 0.5px;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    color: #343a40;
 }
 
 h1 {
-    border-bottom: 3px solid #0072B2; /* A nice blue accent */
-    padding-bottom: 10px;
-    margin-bottom: 20px;
+    border-bottom: 4px solid #0072B2; /* Blue accent line */
+    padding-bottom: 12px;
+    margin-bottom: 25px;
 }
 
-h2 {
-    color: #D55E00;
+h2, h3 {
+    color: #D55E00; /* Orange for subheaders */
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 8px;
 }
 
-/* Expander styling for "Conversation Dossiers" */
+/* Expander for Conversation Dossiers */
 [data-testid="stExpander"] {
-    border: 1px solid #dcdcdc;
+    border: 1px solid #ced4da;
     border-radius: 8px;
     background-color: #ffffff;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+    margin-bottom: 1rem;
 }
 
 [data-testid="stExpander"] summary {
-    background-color: #fafafa;
-    color: #333;
+    background-color: #f1f3f5;
+    color: #343a40;
     font-size: 1.1rem;
     font-weight: 500;
+    padding: 0.75rem 1rem;
     border-radius: 8px 8px 0 0;
 }
 
-/* Metric styling */
-[data-testid="stMetric"] {
-    background-color: #FFFFFF;
-    border: 1px solid #dcdcdc;
-    padding: 15px;
+/* Storybook Container & Box */
+.storybook-container {
+    background-color: #fff;
+    padding: 2rem;
     border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    margin-top: 1rem;
+}
+
+.storybook-title {
     text-align: center;
+    color: #343a40 !important;
+    border-bottom: 2px solid #D55E00 !important;
+    margin-bottom: 1.5rem !important;
+    padding-bottom: 1rem !important;
 }
 
-[data-testid="stMetric"] .st-emotion-cache-1g8_3rj {
-    color: #0072B2; /* Blue for the metric value */
-    font-weight: bold;
-}
-
-/* Storybook and Summary Boxes */
-.storybook-box, .summary-box {
-    background-color: #ffffff;
-    border-left: 6px solid #009E73; /* A nice green for emphasis */
-    padding: 20px;
-    margin-top: 15px;
+.storybook-box {
+    background-color: #fafafa;
+    border: 1px solid #e9ecef;
+    padding: 25px 35px;
     border-radius: 5px;
-    font-family: 'Georgia', serif;
-    font-size: 1.1em;
-    line-height: 1.7;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    font-family: 'Georgia', 'Times New Roman', serif;
+    font-size: 1.15em;
+    line-height: 1.8;
+    text-align: justify;
 }
 
-.summary-box {
-    border-left-color: #D55E00; /* Orange for summaries */
-}
-
-/* Entity Highlighting in stories */
-.entity-highlight {
-    background-color: #FFDDC1; /* Light orange highlight */
-    padding: 2px 6px;
+/* Highlighting Styles */
+/* Actor/Entity Highlighting (Blue) */
+.actor-highlight {
+    background-color: rgba(0, 114, 178, 0.15); /* Light blue background */
+    padding: 2px 5px;
     border-radius: 4px;
     font-weight: bold;
-    color: #D55E00;
+    color: #0c5460;
+    border-bottom: 2px solid rgba(0, 114, 178, 0.4);
+    transition: all 0.2s ease-in-out;
+}
+
+.actor-highlight:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+/* Keyword Highlighting (from title - Yellow) */
+.keyword-highlight {
+    background-color: rgba(255, 193, 7, 0.2); /* Light yellow background */
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-weight: normal;
+    color: #856404;
+    border-bottom: 2px solid rgba(255, 193, 7, 0.5);
 }
 
 /* Tab styling */
 .st-emotion-cache-1sgoq9x p {
-    font-size: 1.1em;
+    font-size: 1.2em;
     font-weight: 500;
-}
-
-/* Radio button styling in sidebar */
-[data-testid="stRadio"] label {
-    font-size: 1.1rem !important;
 }
