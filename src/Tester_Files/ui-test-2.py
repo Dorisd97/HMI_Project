@@ -13,7 +13,7 @@ import json
 
 from itertools import combinations
 
-from src.config.config import PNG_IMAGE, PICKEL_FILE, PROCESSED_JSON_OUTPUT, CACHED_CLUSTER_STORIES
+from src.config.config import PNG_IMAGE, PICKEL_FILE, PROCESSED_JSON_OUTPUT, CACHED_CLUSTER_STORIES, THEMATIC_STORIES
 
 # --- Configuration Setup ---
 # The original config import is commented out to make this script self-contained.
@@ -25,7 +25,8 @@ PNG_IMAGE = PNG_IMAGE  # A placeholder name for your logo image
 PICKLE_DIR = PICKEL_FILE  # Directory for .pkl files
 PROCESSED_JSON_OUTPUT = PROCESSED_JSON_OUTPUT  # Required for the Dashboard page
 # This JSON is the source for the new Network page and the AI Summary
-THEMATIC_STORIES = CACHED_CLUSTER_STORIES
+CACHED_CLUSTER_STORIES = CACHED_CLUSTER_STORIES
+THEMATIC_STORIES = THEMATIC_STORIES
 
 # --- Advanced Analysis Imports ---
 try:
@@ -457,7 +458,7 @@ def entity_relationship_network_page():
     st.markdown(
         "Select a story to visualize the key entities and concepts discussed within it. This network is styled to match the investigation example.")
 
-    stories = load_stories_from_json(THEMATIC_STORIES)
+    stories = load_stories_from_json(CACHED_CLUSTER_STORIES)
     if not stories:
         return
 
