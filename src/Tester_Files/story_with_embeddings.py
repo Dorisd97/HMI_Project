@@ -8,7 +8,7 @@ import hdbscan
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
-from src.config.config import PROCESSED_JSON_OUTPUT
+from src.config.config import PROCESSED_JSON_OUTPUT, THEMATIC_STORIES
 
 # ================= CONFIG ===================
 INPUT_FILE = PROCESSED_JSON_OUTPUT
@@ -73,15 +73,24 @@ def generate_theme_story(theme_title, cluster_emails):
         [f"Subject: {e['subject']}\nSummary: {e['summary']}" for e in cluster_emails]
     )
     prompt = f"""
-Analyze the following Enron emails and generate a detailed story around the theme: '{theme_title}'.
-Narrate the events chronologically. Highlight key people, companies, and the evolution of issues.
+You are an expert AI narrative analyst specializing in corporate investigations. Using the summaries of these Enron emails, do the following:
 
-Emails:
+1. Infer the dominant theme across all the emails.
+2. Write a cohesive investigative‐style **story** (about 200–300 words) that spans the entire cluster.
+3. Structure your output as:
+   Title: A concise, evocative title for the story.
+   Actors: A bullet list of key people and organizations involved.
+   Story: The narrative, laid out chronologically, highlighting major events, decisions, legal or regulatory concerns, and their evolution.
+   Conclusion: A brief wrap-up of the outcome and lasting impact.
+
+Suggested theme (for guidance): "{theme_title}"
+
+Emails to analyze:
 {email_blocks}
-
-End with a conclusion summarizing the outcome and impact.
 """
     return query_ollama(prompt)
+
+
 
 # ============ Step 5: Build and Visualize Network ==============
 def build_network(theme_stories, cluster_map):
@@ -130,7 +139,7 @@ def main():
         print(f"\n📚 {theme_title}:\n{'-' * 60}\n{story[:600]}...\n")
 
     # Save stories to file
-    with open("thematic_stories_output.txt", "w", encoding="utf-8") as out_file:
+    with open(THEMATIC_STORIES, "w", encoding="utf-8") as out_file:
         for theme, story in theme_stories.items():
             out_file.write(f"📚 {theme}\n{'=' * 60}\n{story}\n\n\n")
     print("✅ All thematic stories saved to 'thematic_stories_output.txt'")

@@ -6,7 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 import networkx as nx
 import plotly.figure_factory as ff
 from wordcloud import WordCloud
@@ -257,7 +257,255 @@ def create_network_graph(cluster_stories):
     return fig
 
 
-def create_cluster_network_graph(cluster_story):
+def extract_entities_advanced(text):
+    """Extract entities from text using regex patterns"""
+    # Companies (with Corp, Inc, LLC, etc.)
+    companies = re.findall(
+        r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*(?:\s+(?:Corp|Corporation|Inc|LLC|Company|Co\.|Ltd|Limited|Energy|Power|Gas|Electric|Trading))\b',
+        text)
+
+    # General entities (capitalized words/phrases)
+    entities = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*){0,3}\b', text)
+
+    # Filter out common stop words
+    stop_words = {'The', 'This', 'That', 'These', 'Those', 'A', 'An', 'And', 'Or', 'But', 'In', 'On', 'At', 'To', 'For',
+                  'Of', 'With', 'By', 'From', 'About', 'Into', 'Through', 'During', 'Before', 'After', 'Above', 'Below',
+                  'Up', 'Down', 'Out', 'Off', 'Over', 'Under', 'Again', 'Further', 'Then', 'Once', 'Here', 'There',
+                  'When', 'Where', 'Why', 'How', 'All', 'Any', 'Both', 'Each', 'Few', 'More', 'Most', 'Other', 'Some',
+                  'Such', 'No', 'Nor', 'Not', 'Only', 'Own', 'Same', 'So', 'Than', 'Too', 'Very', 'Can', 'Will', 'Just',
+                  'Should', 'Now', 'First', 'Second', 'Third', 'Last', 'Next', 'Previous', 'Following', 'Main', 'Key',
+                  'Important', 'Major', 'Minor', 'New', 'Old', 'Current', 'Recent', 'Future', 'Past', 'Present'}
+
+    all_entities = list(set(companies + entities))
+    filtered_entities = [entity for entity in all_entities if entity not in stop_words and len(entity) > 2]
+
+    return filtered_entities
+
+
+def categorize_theme(title, content):
+    """Categorize themes based on content"""
+    text = f"{title} {content}".lower()
+
+    categories = {
+        'Mergers & Acquisitions': ['merger', 'acquisition', 'dynegy', 'deal', 'takeover', 'buyout'],
+        'Financial Issues': ['financial', 'credit', 'debt', 'payment', 'money', 'bankruptcy', 'loss'],
+        'Legal Matters': ['legal', 'lawsuit', 'court', 'settlement', 'litigation', 'regulation'],
+        'Energy Trading': ['gas', 'power', 'energy', 'trading', 'pipeline', 'electricity'],
+        'Corporate Governance': ['board', 'executive', 'ceo', 'management', 'governance', 'directors'],
+        'Regulatory Affairs': ['ferc', 'sec', 'regulatory', 'commission', 'compliance'],
+        'Network & Technology': ['network', 'system', 'technology', 'online', 'platform'],
+        'General Business': []  # Default category
+    }
+
+    for category, keywords in categories.items():
+        if any(keyword in text for keyword in keywords):
+            return category
+
+    return 'General Business'
+
+
+def build_thematic_network(thematic_stories):
+    """Build network graph from thematic stories"""
+    G = nx.Graph()
+    theme_entities = {}
+
+    # Process each thematic story
+    for story in thematic_stories:
+        theme_id = f"Theme-{story['theme_number']}"
+        title = story.get('title', '')
+        content = story.get('content', '')
+
+        # Extract entities from title and content
+        entities = extract_entities_advanced(f"{title} {content}")
+        entities = entities[:8]  # Limit to top 8 entities per theme
+
+        # Categorize theme
+        category = categorize_theme(title, content)
+
+        # Store for later use
+        theme_entities[theme_id] = {
+            'entities': entities,
+            'title': title,
+            'category': category,
+            'word_count': len(content.split())
+        }
+
+        # Add theme node
+        G.add_node(theme_id,
+                   node_type='theme',
+                   title=title,
+                   category=category,
+                   word_count=len(content.split()),
+                   size=min(len(content.split()) / 50, 30))
+
+        # Add entity nodes and connections
+        for entity in entities:
+            if not G.has_node(entity):
+                G.add_node(entity,
+                           node_type='entity',
+                           themes=[],
+                           size=5)
+
+            G.nodes[entity]['themes'].append(theme_id)
+            G.add_edge(theme_id, entity, edge_type='theme_entity')
+
+    # Add edges between themes that share entities
+    themes = [node for node, data in G.nodes(data=True) if data.get('node_type') == 'theme']
+
+    for i, theme1 in enumerate(themes):
+        for theme2 in themes[i + 1:]:
+            # Check for shared entities
+            theme1_entities = set(theme_entities[theme1]['entities'])
+            theme2_entities = set(theme_entities[theme2]['entities'])
+
+            shared_entities = theme1_entities.intersection(theme2_entities)
+
+            if shared_entities:
+                weight = len(shared_entities)
+                G.add_edge(theme1, theme2,
+                           edge_type='theme_theme',
+                           weight=weight,
+                           shared_entities=list(shared_entities))
+
+    return G, theme_entities
+
+
+def create_thematic_network_plotly(G, theme_entities):
+    """Create interactive network visualization using Plotly"""
+    if not G.nodes():
+        return None
+
+    # Create layout
+    try:
+        pos = nx.spring_layout(G, k=3, iterations=50, seed=42)
+    except:
+        pos = nx.random_layout(G, seed=42)
+
+    # Separate nodes by type
+    theme_nodes = [node for node, data in G.nodes(data=True) if data.get('node_type') == 'theme']
+    entity_nodes = [node for node, data in G.nodes(data=True) if data.get('node_type') == 'entity']
+
+    # Prepare edges
+    theme_theme_edges = [(u, v) for u, v, data in G.edges(data=True) if data.get('edge_type') == 'theme_theme']
+    theme_entity_edges = [(u, v) for u, v, data in G.edges(data=True) if data.get('edge_type') == 'theme_entity']
+
+    # Create edge traces
+    edge_traces = []
+
+    # Theme-theme edges (red)
+    edge_x_tt = []
+    edge_y_tt = []
+    for edge in theme_theme_edges:
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x_tt.extend([x0, x1, None])
+        edge_y_tt.extend([y0, y1, None])
+
+    if edge_x_tt:
+        edge_trace_tt = go.Scatter(x=edge_x_tt, y=edge_y_tt,
+                                   line=dict(width=2, color='#FF6B6B'),
+                                   hoverinfo='none',
+                                   mode='lines',
+                                   name='Theme Connections')
+        edge_traces.append(edge_trace_tt)
+
+    # Theme-entity edges (teal)
+    edge_x_te = []
+    edge_y_te = []
+    for edge in theme_entity_edges:
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x_te.extend([x0, x1, None])
+        edge_y_te.extend([y0, y1, None])
+
+    if edge_x_te:
+        edge_trace_te = go.Scatter(x=edge_x_te, y=edge_y_te,
+                                   line=dict(width=1, color='#4ECDC4'),
+                                   hoverinfo='none',
+                                   mode='lines',
+                                   name='Theme-Entity Links')
+        edge_traces.append(edge_trace_te)
+
+    # Create node traces
+    node_traces = []
+
+    # Theme nodes (red)
+    if theme_nodes:
+        theme_x = [pos[node][0] for node in theme_nodes]
+        theme_y = [pos[node][1] for node in theme_nodes]
+        theme_text = [f"T-{node.split('-')[-1]}" for node in theme_nodes]
+        theme_sizes = [max(G.nodes[node].get('size', 10) * 3, 15) for node in theme_nodes]
+        theme_hover = [f"<b>{G.nodes[node].get('title', node)}</b><br>"
+                       f"Category: {G.nodes[node].get('category', 'Unknown')}<br>"
+                       f"Word Count: {G.nodes[node].get('word_count', 0)}<br>"
+                       f"Connections: {G.degree(node)}"
+                       for node in theme_nodes]
+
+        theme_trace = go.Scatter(x=theme_x, y=theme_y,
+                                 mode='markers+text',
+                                 text=theme_text,
+                                 textposition="middle center",
+                                 hovertemplate='%{hovertext}<extra></extra>',
+                                 hovertext=theme_hover,
+                                 marker=dict(size=theme_sizes,
+                                             color='#FF6B6B',
+                                             line=dict(width=2, color='darkred')),
+                                 name='Themes')
+        node_traces.append(theme_trace)
+
+    # Entity nodes (teal)
+    if entity_nodes:
+        entity_x = [pos[node][0] for node in entity_nodes]
+        entity_y = [pos[node][1] for node in entity_nodes]
+        entity_text = [node[:10] + '...' if len(node) > 10 else node for node in entity_nodes]
+        entity_sizes = [max(G.nodes[node].get('size', 5) * 2, 8) for node in entity_nodes]
+        entity_hover = [f"<b>{node}</b><br>"
+                        f"Connected Themes: {G.degree(node)}<br>"
+                        f"Type: Entity"
+                        for node in entity_nodes]
+
+        entity_trace = go.Scatter(x=entity_x, y=entity_y,
+                                  mode='markers+text',
+                                  text=entity_text,
+                                  textposition="middle center",
+                                  hovertemplate='%{hovertext}<extra></extra>',
+                                  hovertext=entity_hover,
+                                  marker=dict(size=entity_sizes,
+                                              color='#4ECDC4',
+                                              line=dict(width=1, color='darkcyan')),
+                                  name='Entities')
+        node_traces.append(entity_trace)
+
+    # Create the figure
+    fig = go.Figure(data=edge_traces + node_traces)
+
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text="🕸️ Thematic Stories Network<br><sub>Red = Themes, Teal = Entities</sub>",
+            x=0.5,
+            font=dict(size=16)
+        ),
+        showlegend=True,
+        hovermode='closest',
+        margin=dict(b=20, l=5, r=5, t=60),
+        annotations=[
+            dict(
+                text=f"Network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges",
+                showarrow=False,
+                xref="paper", yref="paper",
+                x=0.005, y=-0.002,
+                xanchor="left", yanchor="bottom",
+                font=dict(color="grey", size=10)
+            )
+        ],
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        height=600,
+        plot_bgcolor='white'
+    )
+
+    return fig
     """Create network graph for a specific cluster story"""
     if not cluster_story:
         return None
@@ -497,6 +745,72 @@ def main():
         st.header("📚 Thematic Story Analysis")
         st.markdown("*Deep dive into the key narratives extracted from Enron email communications*")
 
+        # Build and display thematic network
+        st.subheader("🕸️ Thematic Stories Network")
+        st.markdown("*Interactive network showing relationships between themes and entities*")
+
+        with st.spinner("Building thematic network..."):
+            G, theme_entities = build_thematic_network(thematic_stories)
+            network_fig = create_thematic_network_plotly(G, theme_entities)
+
+            if network_fig:
+                st.plotly_chart(network_fig, use_container_width=True)
+
+                # Network statistics
+                col1, col2, col3, col4 = st.columns(4)
+
+                theme_nodes = [node for node, data in G.nodes(data=True) if data.get('node_type') == 'theme']
+                entity_nodes = [node for node, data in G.nodes(data=True) if data.get('node_type') == 'entity']
+
+                with col1:
+                    st.metric("Total Themes", len(theme_nodes))
+                with col2:
+                    st.metric("Total Entities", len(entity_nodes))
+                with col3:
+                    st.metric("Connections", G.number_of_edges())
+                with col4:
+                    if len(theme_nodes) > 0:
+                        avg_connections = G.number_of_edges() / len(theme_nodes)
+                        st.metric("Avg Connections/Theme", f"{avg_connections:.1f}")
+
+                # Network insights
+                with st.expander("🔍 Network Insights"):
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.markdown("**Most Connected Themes:**")
+                        theme_degrees = [(node, G.degree(node)) for node in theme_nodes]
+                        theme_degrees.sort(key=lambda x: x[1], reverse=True)
+
+                        for i, (theme, degree) in enumerate(theme_degrees[:5], 1):
+                            title = theme_entities[theme]['title']
+                            st.write(f"{i}. **{title[:50]}...** ({degree} connections)")
+
+                    with col2:
+                        st.markdown("**Most Connected Entities:**")
+                        entity_degrees = [(node, G.degree(node)) for node in entity_nodes]
+                        entity_degrees.sort(key=lambda x: x[1], reverse=True)
+
+                        for i, (entity, degree) in enumerate(entity_degrees[:5], 1):
+                            st.write(f"{i}. **{entity}** ({degree} themes)")
+
+                # Category distribution
+                categories = [theme_entities[theme]['category'] for theme in theme_nodes]
+                category_counts = Counter(categories)
+
+                if category_counts:
+                    st.subheader("📊 Theme Categories Distribution")
+                    fig_cat = px.pie(
+                        values=list(category_counts.values()),
+                        names=list(category_counts.keys()),
+                        title="Distribution of Thematic Categories"
+                    )
+                    st.plotly_chart(fig_cat, use_container_width=True)
+            else:
+                st.info("Unable to generate thematic network - insufficient data")
+
+        st.markdown("---")
+
         # Search and filter
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -553,6 +867,23 @@ def main():
                         # Extract dates mentioned
                         dates = re.findall(r'\b\d{4}\b|\b\w+\s+\d{1,2},?\s+\d{4}\b', story['content'])
                         st.metric("Dates Referenced", len(set(dates)))
+
+                    # Show entities and category for this story
+                    theme_id = f"Theme-{story['theme_number']}"
+                    if theme_id in theme_entities:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("**Category:**")
+                            st.write(theme_entities[theme_id]['category'])
+
+                        with col2:
+                            st.markdown("**Key Entities:**")
+                            entities_list = theme_entities[theme_id]['entities']
+                            if entities_list:
+                                for entity in entities_list[:5]:
+                                    st.write(f"• {entity}")
+                            else:
+                                st.write("No entities extracted")
         else:
             st.info("No stories found matching your search criteria.")
 
