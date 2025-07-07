@@ -64,8 +64,15 @@ def load_structured_narrative_data():
 
         title = title_match.group(1).strip()
 
-        actors_section_match = re.search(r'Actors:(.*?)(Story:|Summary:|The story begins)', story_text,
-                                         re.DOTALL | re.IGNORECASE)
+        actors_section_match = (
+                re.search(r'Actors\s*:(.*?)(?:Story:|Summary:|The story begins)',
+                          story_text, re.DOTALL | re.IGNORECASE)
+                or re.search(r'key players like (.*?)(?:[.,])', story_text, re.IGNORECASE)
+        )
+        if actors_section_match:
+            raw = actors_section_match.group(1)
+            # split on commas or “and”
+            actors = re.split(r',\s*|\s+and\s+', raw)
         story_section_match = re.search(r'(Story:|Summary:|The story begins)(.*)', story_text,
                                         re.DOTALL | re.IGNORECASE)
 
@@ -162,55 +169,81 @@ def highlight_text(text, terms_to_highlight, css_class):
 
 # --- Visualization ---
 @st.cache_data
-def generate_network_graph(graph_id, text_content, central_node_name, actors_list):
+@st.cache_data
+def generate_network_graph(central_node_name: str, actors_list: list[str]) -> str | None:
     if not actors_list:
         return None
 
-    known_orgs_lower = {"enron", "dynegy", "ferc", "california", "andersen", "ees", "sec", "pg&e", "socal", "reliant",
-                        "mirant", "chevron", "ubs", "citi", "morgan", "corp", "inc", "llc", "commission", "company"}
-    known_people_lower = {"lay", "skilling", "fastow", "watkins", "causey", "whalley", "davis", "mcmahon", "ahearn"}
-
-    net = Network(height='500px', width='100%', bgcolor='#FFFFFF', font_color='#333333', notebook=True,
-                  cdn_resources='in_line')
-    net.force_atlas_2based(gravity=-60, central_gravity=0.02, spring_length=150)
-
-    net.add_node(central_node_name, label=central_node_name, size=25, color='#FF5733', shape='star',
-                 title=f"Central Topic: {central_node_name}")
-
-    actor_counts = Counter(
-        re.findall(r'\b(?:' + '|'.join([re.escape(re.sub(r'\s*\(.*\)', '', a).strip()) for a in actors_list]) + r')\b',
-                   text_content, re.IGNORECASE))
-
+    net = Network(
+        height='500px',
+        width='100%',
+        bgcolor='#FFFFFF',
+        font_color='#333333',
+        notebook=False,
+        cdn_resources='in_line'
+    )
+    # central theme
+    net.add_node(central_node_name, label=central_node_name, shape='star', size=30)
+    # one node per actor, plus an edge back to the theme
     for actor in actors_list:
-        clean_actor = re.sub(r'\s*\(.*\)', '', actor).strip()
-        count = actor_counts.get(clean_actor, 1)
-        size = 12 + count * 2
-        actor_lower = clean_actor.lower()
+        net.add_node(actor, label=actor, shape='dot', size=15)
+        net.add_edge(central_node_name, actor)
 
-        if any(p in actor_lower for p in known_people_lower):
-            shape, icon, color, prefix = 'icon', 'f007', '#0072B2', 'Person'
-        elif any(o in actor_lower for o in known_orgs_lower):
-            shape, icon, color, prefix = 'icon', 'f1ad', '#D55E00', 'Organization'
-        else:
-            shape, icon, color, prefix = 'dot', None, '#009E73', 'Entity'
+    # optional: tweak physics to taste
+    net.set_options("""
+    {
+      "physics": {
+        "barnesHut": {
+          "gravitationalConstant": -6000,
+          "springLength": 200
+        }
+      }
+    }
+    """)
 
-        title = f"{prefix}: {actor}"
-        net.add_node(actor, label=clean_actor, title=title, size=size, shape=shape, color=color,
-                     fa_icon=icon if shape == 'icon' else None, fa_icon_color="#ffffff")
-        net.add_edge(central_node_name, actor, value=count)
+    # return the full HTML string for embedding
+    return net.generate_html()
 
-    if not os.path.exists("temp"):
-        os.makedirs("temp")
-    file_path = os.path.join("temp", f"network_{re.sub(r'[^a-zA-Z0-9]', '_', str(graph_id))}.html")
-
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(net.html)
-    except Exception as e:
-        st.error(f"Error saving graph: {e}")
+@st.cache_data
+def generate_global_network_html(narratives: dict) -> str | None:
+    if not narratives:
         return None
 
-    return file_path
+    net = Network(
+        height='700px',
+        width='100%',
+        bgcolor='#FFFFFF',
+        font_color='#333333',
+        notebook=False,
+        cdn_resources='in_line'
+    )
+    net.force_atlas_2based(gravity=-50, central_gravity=0.01, spring_length=200)
+
+    seen_actors = set()
+    # Add themes and connect to actors
+    for theme, data in narratives.items():
+        net.add_node(
+            theme,
+            label=theme,
+            shape='star',
+            size=25,
+            color='#FF5733',
+            title=theme
+        )
+        for actor in data['actors']:
+            if actor not in seen_actors:
+                net.add_node(
+                    actor,
+                    label=actor,
+                    shape='dot',
+                    size=15,
+                    color='#009E73',
+                    title=actor
+                )
+                seen_actors.add(actor)
+            net.add_edge(theme, actor)
+
+    return net.generate_html()
 
 
 # --- Load Data ---
@@ -289,10 +322,16 @@ def investigation_files_page():
             st.markdown("<br>", unsafe_allow_html=True)
             st.subheader(f"Network of Actors in '{selected_title}'")
             with st.spinner("Generating network graph..."):
-                network_path = generate_network_graph(selected_title, body, selected_title, actors)
-                if network_path and os.path.exists(network_path):
-                    with open(network_path, 'r', encoding='utf-8') as f:
-                        components.html(f.read(), height=510)
+                graph_html = generate_network_graph(selected_title, actors)
+                if graph_html:
+                    components.html(graph_html, height=500, scrolling=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.subheader("🌐 Global Theme–Actor Network")
+            with st.spinner("Building full theme–actor graph…"):
+                html = generate_global_network_html(narratives_dict)
+            if html:
+                components.html(html, height=700, scrolling=True)
 
 
 def timeline_page():
