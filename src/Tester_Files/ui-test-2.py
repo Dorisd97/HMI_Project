@@ -13,7 +13,7 @@ import json
 
 from itertools import combinations
 
-from src.config.config import PNG_IMAGE, PROCESSED_JSON_OUTPUT, CACHED_CLUSTER_STORIES, PICKEL_FILE
+from src.config.config import PNG_IMAGE, PICKEL_FILE, PROCESSED_JSON_OUTPUT, CACHED_CLUSTER_STORIES
 
 # --- Configuration Setup ---
 # The original config import is commented out to make this script self-contained.
@@ -21,10 +21,10 @@ from src.config.config import PNG_IMAGE, PROCESSED_JSON_OUTPUT, CACHED_CLUSTER_S
 
 # --- Paths are defined directly here. ---
 # Ensure these files are in the same directory as your script or provide the correct path.
-PNG_IMAGE = PNG_IMAGE# A placeholder name for your logo image
+PNG_IMAGE = PNG_IMAGE  # A placeholder name for your logo image
 PICKLE_DIR = PICKEL_FILE  # Directory for .pkl files
-PROCESSED_JSON_OUTPUT = PROCESSED_JSON_OUTPUT# Required for the Dashboard page
-# This JSON is now the source for the new Network page and the AI Summary
+PROCESSED_JSON_OUTPUT = PROCESSED_JSON_OUTPUT  # Required for the Dashboard page
+# This JSON is the source for the new Network page and the AI Summary
 THEMATIC_STORIES = CACHED_CLUSTER_STORIES
 
 # --- Advanced Analysis Imports ---
@@ -202,22 +202,23 @@ def extract_entities_from_text(text: str) -> list[str]:
 
 @st.cache_data
 def generate_styled_entity_network(title: str, summary: str, entities: list[str]) -> str | None:
-    """Generates a styled pyvis network graph to match the example image."""
-    net = Network(height='600px', width='100%', bgcolor='#0f0f1e', font_color='white', notebook=False,
+    """Generates a styled pyvis network graph with a LIGHT theme."""
+    # Updated to a light theme
+    net = Network(height='600px', width='100%', bgcolor='#FFFFFF', font_color='black', notebook=False,
                   cdn_resources='in_line')
 
-    # Add central nodes from the image example
+    # Central email nodes
     center_emails = ['anne.bike@enron.com', 'mike.grigsby@enron.com']
     for email in center_emails:
-        net.add_node(email, label=email, shape='dot', size=15, color='#0dcaf0')
+        net.add_node(email, label=email, shape='dot', size=15, color='#0d6efd')  # Darker blue for contrast
 
-    # Add peripheral nodes for other entities
+    # Peripheral entity nodes
     peripheral_nodes = [e for e in entities if e not in center_emails]
     for entity in peripheral_nodes:
-        net.add_node(entity, label=entity, shape='dot', size=12, color='#0dcaf0')
+        net.add_node(entity, label=entity, shape='dot', size=12, color='#0d6efd')
         # Connect all peripheral nodes to the central email nodes
         for email in center_emails:
-            net.add_edge(entity, email, color='#495057')
+            net.add_edge(entity, email, color='#adb5bd')  # Light grey for edges
 
     net.set_options("""
     var options = {
@@ -253,7 +254,10 @@ def train_and_visualize_som(documents):
         winner = som.winner(doc_vector)
         if winner not in win_map: win_map[winner] = []
         win_map[winner].append(i)
-    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # --- FINAL FIX: Reduced the figure size for the SOM plot even further ---
+    fig, ax = plt.subplots(figsize=(6, 6))  # Changed from (8, 8) to (6, 6)
+
     im = ax.pcolormesh(distance_map.T, cmap='bone_r')
     fig.colorbar(im, ax=ax)
     ax.set_title('Self-Organizing Map of Email Documents')
@@ -276,16 +280,23 @@ def perform_lda(documents, n_topics=5, n_top_words=10):
     return topics
 
 
-@st.cache_data
 def create_cooccurrence_heatmap(df, entity_type='organizations', top_n=15):
-    all_entities = df['entities'].apply(lambda x: x.get(entity_type, [])).explode().dropna()
+    # This check is crucial since the column might not exist in all dataframes.
+    if 'entities' not in df.columns:
+        st.warning("The loaded data does not contain an 'entities' column required for this feature.")
+        return None
+
+    all_entities = df['entities'].apply(
+        lambda x: x.get(entity_type, []) if isinstance(x, dict) else []).explode().dropna()
     top_entities = all_entities.value_counts().nlargest(top_n).index.tolist()
     co_matrix = pd.DataFrame(0, index=top_entities, columns=top_entities)
     for _, row in df.iterrows():
-        row_entities = list(set(e for e in row['entities'].get(entity_type, []) if e in top_entities))
-        for e1, e2 in combinations(row_entities, 2):
-            co_matrix.loc[e1, e2] += 1
-            co_matrix.loc[e2, e1] += 1
+        # Ensure row['entities'] is a dict before calling .get()
+        if isinstance(row['entities'], dict):
+            row_entities = list(set(e for e in row['entities'].get(entity_type, []) if e in top_entities))
+            for e1, e2 in combinations(row_entities, 2):
+                co_matrix.loc[e1, e2] += 1
+                co_matrix.loc[e2, e1] += 1
     fig = px.imshow(co_matrix, text_auto=True, aspect="auto",
                     labels=dict(x="Entity", y="Entity", color="Co-occurrence Count"),
                     title=f'Co-occurrence of Top {top_n} {entity_type.capitalize()}')
@@ -346,7 +357,6 @@ def dashboard_page():
     col2.metric("Unique Senders", df['from'].nunique())
     col3.metric("Date Range", f"{df['date'].min().strftime('%Y-%m-%d')} to {df['date'].max().strftime('%Y-%m-%d')}")
 
-    # The original JSON data may not have these columns, so we check first
     if 'classification' in df.columns and 'tone_analysis' in df.columns:
         col_viz1, col_viz2 = st.columns(2)
         with col_viz1:
@@ -391,14 +401,12 @@ def dashboard_page():
             for topic in discovered_topics: st.markdown(topic)
 
     with st.expander("🔗 Entity Co-occurrence Heatmap"):
-        if 'entities' in df.columns:
-            entity_type = st.selectbox("Select Entity Type", options=['organizations', 'people', 'projects', 'topics'],
-                                       format_func=lambda x: x.capitalize())
-            with st.spinner(f"Generating co-occurrence map for {entity_type}..."):
-                heatmap_fig = create_cooccurrence_heatmap(df, entity_type=entity_type)
+        entity_type = st.selectbox("Select Entity Type", options=['organizations', 'people', 'projects', 'topics'],
+                                   format_func=lambda x: x.capitalize())
+        with st.spinner(f"Generating co-occurrence map for {entity_type}..."):
+            heatmap_fig = create_cooccurrence_heatmap(df, entity_type=entity_type)
+            if heatmap_fig:
                 st.plotly_chart(heatmap_fig, use_container_width=True)
-        else:
-            st.warning("The loaded data does not contain an 'entities' column required for this feature.")
 
 
 def investigation_files_page():
@@ -444,7 +452,7 @@ def investigation_files_page():
 
 
 def entity_relationship_network_page():
-    """The new network page, replacing the old Network Visualizer."""
+    """The new network page, styled with a LIGHT theme."""
     st.title("🕸️ Entity Relationship Network")
     st.markdown(
         "Select a story to visualize the key entities and concepts discussed within it. This network is styled to match the investigation example.")
@@ -454,7 +462,6 @@ def entity_relationship_network_page():
         return
 
     all_titles = list(stories.keys())
-    # Find the index of the example story to set it as default
     example_title = "New Member Added to Northern Border Partners' Audit Committee: Dan Dienstbier"
     default_index = all_titles.index(example_title) if example_title in all_titles else 0
 
@@ -467,13 +474,12 @@ def entity_relationship_network_page():
 
         st.markdown("---")
         st.subheader(title)
-        st.markdown(f"<p style='background-color:#0f0f1e; color:white; padding:15px; border-radius:5px;'>{summary}</p>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color:#F0F2F6; color:black; padding:15px; border: 1px solid #dee2e6; border-radius:5px;'>{summary}</div>",
+            unsafe_allow_html=True)
         st.subheader("Entity Relationship Network")
 
         with st.spinner("Extracting entities and building network..."):
-            # These are the entities from the example image. We will use them for this specific case.
-            # A more dynamic approach would use NLP to extract them from the summary.
             example_entities = [
                 'pipeline statements', 'SOCAL', 'invoice', 'deal', 'EOL logic issues', 'BP', 'Settlements',
                 'third party gas', 'volumes allocation', 'anne.bike@enron.com', 'houston.ward@enron.com', 'Enron Corp',
@@ -483,7 +489,6 @@ def entity_relationship_network_page():
                 'Enron', 'SOCAL imbalances'
             ]
 
-            # The styled graph function is designed to replicate the image
             graph_html = generate_styled_entity_network(title, summary, example_entities)
 
         if graph_html:
@@ -518,7 +523,6 @@ def timeline_page():
         orgs = spike_data.get('organizations', [])
         all_actors = [p.strip() for sublist in participants for p in sublist.split(',') if p.strip()] + orgs
         actor_counts = Counter(all_actors)
-        highlighted_summary = highlight_text(summary_text, list(actor_counts.keys()), 'actor-highlight')
 
         col1, col2 = st.columns([1, 2])
         with col1:
