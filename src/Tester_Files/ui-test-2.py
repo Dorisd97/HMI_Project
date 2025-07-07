@@ -119,34 +119,52 @@ def load_stories_from_json(file_path):
         return {}
 
 
-# --- LLM & VISUALIZATION FUNCTIONS ---
+# --- LLM Function ---
 @st.cache_data
 def generate_llm_summary(file_path):
-    """Generates an executive summary using a local LLM."""
     if not LANGCHAIN_AVAILABLE:
-        return "Could not generate summary: `langchain` libraries not installed."
+        return "Could not generate summary: `langchain` libraries not installed. Please run `pip install langchain langchain-community`."
+
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            # We read the JSON and extract summaries to create the context
-            stories = json.load(f)
-            context = "\n\n---\n\n".join([f"Title: {s['title']}\nSummary: {s['summary']}" for s in stories])
+            context = f.read()
 
         llm = ChatOllama(model="mistral")
+
         prompt = f"""
-        As a financial investigator analyzing the Enron scandal, provide a high-level executive summary based on the provided collection of email cluster summaries.
+        As a financial investigator analyzing the Enron scandal, your task is to provide a high-level executive summary based on the provided text, which is a collection of automatically generated stories from Enron's emails.
+
         Your summary should:
-        1. Identify the main recurring themes (e.g., financial manipulation, regulatory issues, the Dynegy merger).
-        2. Name the key companies and individuals who appear frequently.
-        3. Describe the general timeline or progression of events if evident.
-        4. Conclude with a synthesis of the key events that led to Enron's downfall, according to this text.
-        Keep the summary concise and professional. CONTEXT:\n---\n{context}\n---
+        1.  Identify the main recurring themes (e.g., financial manipulation, regulatory issues, the Dynegy merger).
+        2.  Name the key companies and individuals who appear frequently.
+        3.  Describe the general timeline or progression of events as depicted in the stories.
+        4.  Conclude with a synthesis of the key events that led to Enron's downfall, according to this specific text.
+
+        Keep the summary concise and professional, suitable for a case overview.
+
+        CONTEXT:
+        ---
+        {context}
+        ---
         """
+
         message = HumanMessage(content=prompt)
         response = llm([message])
         return response.content
-    except Exception as e:
-        return f"**Error: Could not connect to local LLM.** Ensure Ollama is running with the 'mistral' model available. Error: {e}"
 
+    except Exception as e:
+        return f"""
+        **Error: Could not connect to local LLM.**
+
+        Please ensure you have Ollama installed and running in the background.
+
+        **Setup Steps:**
+        1. Download and run Ollama from [ollama.com](https://ollama.com).
+        2. In your terminal, run the command: `ollama run mistral`
+        3. Make sure the Ollama application is running before you start this Streamlit app.
+
+        *Detailed Error: {e}*
+        """
 
 def extract_keywords_from_title(title):
     stop_words = {'a', 'an', 'and', 'the', 'in', 'of', 'for', 'with', 'on', 'at', 'by', 'to', 'is', 'was', 'from',
