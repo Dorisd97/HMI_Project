@@ -13,6 +13,7 @@ import json  # JSON file operations
 
 from itertools import combinations  # For generating combinations
 
+from src.app_helper.ai_summary_generator import generate_llm_summary
 from src.config.config import ENRON_LOGO, PROCESSED_JSON_OUTPUT, CLUSTER_STORIES, THEMATIC_STORIES, PICKLE_DIR  # Config imports
 
 # --- Configuration Setup ---
@@ -132,79 +133,79 @@ def load_stories_from_json(file_path):
 
 
 # --- LLM Function ---
-@st.cache_data
-def generate_llm_summary(file_path):
-    if not LANGCHAIN_AVAILABLE:
-        return "Could not generate summary: `langchain` libraries not installed. Please run `pip install langchain langchain-community`."
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            context = f.read()
-
-        llm = ChatOllama(model="mistral")
-
-        prompt = f"""
-        **Your Persona:** You are a master storyteller and corporate historian. Your expertise lies in synthesizing complex, fragmented information into a single, compelling, and historically accurate narrative.
-
-        **Your Task:** Analyze the provided context, which is a large text file containing over 100 individual stories, each summarizing a "theme" from the Enron email dataset. Your goal is to synthesize these disparate stories into a single, cohesive, and epic narrative chronicling the rise and fall of Enron.
-
-        **Important Context on the Input Data:** The provided text is not a single document. It is a compilation of over 100 thematically grouped summaries. These summaries may overlap, repeat information, and cover different time periods and actors. Your primary challenge is to connect the dots, de-duplicate information, and build one overarching chronological narrative from these fragments.
-
-        **Instructions for the Narrative:**
-        1.  **Identify the Overarching Timeline:** Piece together the events chronologically, from the early signs of strategic maneuvering in California and the Dynegy merger talks to the final collapse and its aftermath.
-        2.  **Weave a Cohesive Story:** Do not simply list facts or themes. Create a story with a clear **beginning** (the peak of Enron's power and early manipulative strategies), a **middle** (the desperate attempts to maintain the façade, like the Dynegy merger), and a **climax** (the rapid unraveling and bankruptcy).
-        3.  **Incorporate Key Themes:** Seamlessly integrate the recurring themes from the source text—such as the California energy crisis, the secretive Dynegy merger negotiations, manipulation of regulatory bodies (FERC, CPUC), deceptive accounting practices (hidden files, SPEs), and the internal culture of secrecy—into the narrative.
-        4.  **Tone:** Use a compelling, journalistic, and slightly dramatic tone to capture the scale of the corporate tragedy. Use phrases that evoke a sense of a "house of cards" or a "dance of deception."
-
-        **Required Output Format:**
-        You MUST structure your response using the exact following Markdown format and headings:
-
-        ---
-        ### **Title: [Create a compelling, dramatic title for the story]**
-
-        ### **Key Actors:**
-        *   **Enron Executives:** [List the key executives]
-        *   **Corporate Entities:** [List the key companies and partners]
-        *   **Regulatory & Government Bodies:** [List the key agencies and political figures]
-
-        ### **The Story**
-
-        #### **The Beginning: [Create a subtitle for the first phase of the story, e.g., A Web of Power and Profit]**
-        [Write the first part of the narrative here, covering Enron's peak and the initial signs of trouble.]
-
-        #### **The Middle: [Create a subtitle for the second phase, e.g., The Desperate Dance]**
-        [Write the middle part of the narrative, focusing on the escalating problems and major events like the Dynegy merger attempt.]
-
-        #### **The Climax: [Create a subtitle for the final phase, e.g., The House of Cards Collapses]**
-        [Write the climax of the story, detailing the company's rapid downfall, bankruptcy, and the reasons why.]
-
-        #### **The Conclusion: [Use a subtitle like Fallout and Legacy]**
-        [Conclude the story by summarizing the immediate fallout (bankruptcy, trials) and the long-term legacy of the scandal (e.g., Sarbanes-Oxley Act).]
-        ---
-
-        **CONTEXT TO ANALYZE:**
-        ---
-        {context}
-        ---
-        """
-
-        message = HumanMessage(content=prompt)
-        response = llm([message])
-        return response.content
-
-    except Exception as e:
-        return f"""
-        **Error: Could not connect to local LLM.**
-
-        Please ensure you have Ollama installed and running in the background.
-
-        **Setup Steps:**
-        1. Download and run Ollama from [ollama.com](https://ollama.com).
-        2. In your terminal, run the command: `ollama run mistral`
-        3. Make sure the Ollama application is running before you start this Streamlit app.
-
-        *Detailed Error: {e}*
-        """
+# @st.cache_data
+# def generate_llm_summary(file_path):
+#     if not LANGCHAIN_AVAILABLE:
+#         return "Could not generate summary: `langchain` libraries not installed. Please run `pip install langchain langchain-community`."
+#
+#     try:
+#         with open(file_path, 'r', encoding='utf-8') as f:
+#             context = f.read()
+#
+#         llm = ChatOllama(model="mistral")
+#
+#         prompt = f"""
+#         **Your Persona:** You are a master storyteller and corporate historian. Your expertise lies in synthesizing complex, fragmented information into a single, compelling, and historically accurate narrative.
+#
+#         **Your Task:** Analyze the provided context, which is a large text file containing over 100 individual stories, each summarizing a "theme" from the Enron email dataset. Your goal is to synthesize these disparate stories into a single, cohesive, and epic narrative chronicling the rise and fall of Enron.
+#
+#         **Important Context on the Input Data:** The provided text is not a single document. It is a compilation of over 100 thematically grouped summaries. These summaries may overlap, repeat information, and cover different time periods and actors. Your primary challenge is to connect the dots, de-duplicate information, and build one overarching chronological narrative from these fragments.
+#
+#         **Instructions for the Narrative:**
+#         1.  **Identify the Overarching Timeline:** Piece together the events chronologically, from the early signs of strategic maneuvering in California and the Dynegy merger talks to the final collapse and its aftermath.
+#         2.  **Weave a Cohesive Story:** Do not simply list facts or themes. Create a story with a clear **beginning** (the peak of Enron's power and early manipulative strategies), a **middle** (the desperate attempts to maintain the façade, like the Dynegy merger), and a **climax** (the rapid unraveling and bankruptcy).
+#         3.  **Incorporate Key Themes:** Seamlessly integrate the recurring themes from the source text—such as the California energy crisis, the secretive Dynegy merger negotiations, manipulation of regulatory bodies (FERC, CPUC), deceptive accounting practices (hidden files, SPEs), and the internal culture of secrecy—into the narrative.
+#         4.  **Tone:** Use a compelling, journalistic, and slightly dramatic tone to capture the scale of the corporate tragedy. Use phrases that evoke a sense of a "house of cards" or a "dance of deception."
+#
+#         **Required Output Format:**
+#         You MUST structure your response using the exact following Markdown format and headings:
+#
+#         ---
+#         ### **Title: [Create a compelling, dramatic title for the story]**
+#
+#         ### **Key Actors:**
+#         *   **Enron Executives:** [List the key executives]
+#         *   **Corporate Entities:** [List the key companies and partners]
+#         *   **Regulatory & Government Bodies:** [List the key agencies and political figures]
+#
+#         ### **The Story**
+#
+#         #### **The Beginning: [Create a subtitle for the first phase of the story, e.g., A Web of Power and Profit]**
+#         [Write the first part of the narrative here, covering Enron's peak and the initial signs of trouble.]
+#
+#         #### **The Middle: [Create a subtitle for the second phase, e.g., The Desperate Dance]**
+#         [Write the middle part of the narrative, focusing on the escalating problems and major events like the Dynegy merger attempt.]
+#
+#         #### **The Climax: [Create a subtitle for the final phase, e.g., The House of Cards Collapses]**
+#         [Write the climax of the story, detailing the company's rapid downfall, bankruptcy, and the reasons why.]
+#
+#         #### **The Conclusion: [Use a subtitle like Fallout and Legacy]**
+#         [Conclude the story by summarizing the immediate fallout (bankruptcy, trials) and the long-term legacy of the scandal (e.g., Sarbanes-Oxley Act).]
+#         ---
+#
+#         **CONTEXT TO ANALYZE:**
+#         ---
+#         {context}
+#         ---
+#         """
+#
+#         message = HumanMessage(content=prompt)
+#         response = llm([message])
+#         return response.content
+#
+#     except Exception as e:
+#         return f"""
+#         **Error: Could not connect to local LLM.**
+#
+#         Please ensure you have Ollama installed and running in the background.
+#
+#         **Setup Steps:**
+#         1. Download and run Ollama from [ollama.com](https://ollama.com).
+#         2. In your terminal, run the command: `ollama run mistral`
+#         3. Make sure the Ollama application is running before you start this Streamlit app.
+#
+#         *Detailed Error: {e}*
+#         """
 
 def extract_keywords_from_title(title):
     stop_words = {'a', 'an', 'and', 'the', 'in', 'of', 'for', 'with', 'on', 'at', 'by', 'to', 'is', 'was', 'from',
