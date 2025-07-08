@@ -93,3 +93,20 @@ h2, h3 {
     font-size: 1.2em;
     font-weight: 500;
 }
+
+.summary-title {
+        font-size: 1.75em;
+        font-weight: 600;
+        color: #2c3e50;
+        display: block;
+        margin-bottom: 20px;
+        border-bottom: 2px solid #7f8c8d;
+        padding-bottom: 10px;
+    }
+.highlighted-keyword {
+        background-color: rgba(255, 229, 102, 0.7); /* A pleasant yellow highlight */
+        padding: 2px 5px;
+        border-radius: 4px;
+        font-weight: 600;
+        color: #34495e;
+ }
