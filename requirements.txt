@@ -7,3 +7,8 @@ sentence-transformers  # A practical, high-performance library for embeddings
 umap-learn
 hdbscan
 streamlit
+pyvis
+plotly
+matplotlib
+streamlit_agraph
+natsort
