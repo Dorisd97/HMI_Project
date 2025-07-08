@@ -576,13 +576,49 @@ def timeline_page():
     st.markdown("---")
     st.header("Investigate a Specific Event")
     selected_title = st.selectbox("Select an Event Spike:", options=list(activity_spike_map.keys()))
+
     if selected_title:
         spike_data = activity_spike_map[selected_title]
         summary_text = spike_data['summary']
         participants = spike_data.get('participants', [])
         orgs = spike_data.get('organizations', [])
-        all_actors = [p.strip() for sublist in participants for p in sublist.split(',') if p.strip()] + orgs
-        actor_counts = Counter(all_actors)
+        all_actors_for_counting = [p.strip() for sublist in participants for p in sublist.split(',') if
+                                   p.strip()] + orgs
+        actor_counts = Counter(all_actors_for_counting)
+
+        # --- Start of New Code: Text Processing for Highlighting ---
+        # 1. Define keywords to highlight
+        # Get unique names and organizations from the data
+        dynamic_keywords = list(set([p.split('@')[0].replace('.', ' ').title() for p in participants] + orgs))
+        # Add other relevant domain terms
+        domain_keywords = [
+            'stock price', 'SEC probe', 'merger', 'acquisition', 'restructuring',
+            'divestiture', 'conference calls', 'securities lawsuits', 'Ken Lay'
+        ]
+        # Combine, ensure uniqueness, and sort by length (longest first) to prevent partial matches
+        # keywords_to_highlight = sorted(list(set(dynamic_keywords + domain_keywords)), key=len, reverse=True)
+
+        # 2. Process the summary text
+        # Separate the title from the body
+        parts = summary_text.split('\n\n', 1)
+        title_raw = parts[0].replace('**', '')
+        body_raw = parts[1] if len(parts) > 1 else ""
+
+        # Wrap title in its own HTML span with the 'summary-title' class
+        title_html = f"<span class='summary-title'>{title_raw}</span>"
+
+        # Iterate through keywords and wrap them in the 'highlighted-keyword' class
+        # highlighted_body = body_raw
+        # for keyword in keywords_to_highlight:
+        #     # Use regex for case-insensitive, whole-word matching. re.escape handles special characters.
+        #     pattern = re.compile(r'\b(' + re.escape(keyword) + r')\b', re.IGNORECASE)
+        #     # The lambda function ensures that the original casing of the word is preserved
+        #     replacement = lambda m: f"<span class='highlighted-keyword'>{m.group(1)}</span>"
+        #     highlighted_body = pattern.sub(replacement, highlighted_body)
+        #
+        # # Combine the formatted title and body
+        final_html_summary = f"{title_html}{body_raw}"
+        # --- End of New Code ---
 
         col1, col2 = st.columns([1, 2])
         with col1:
@@ -596,12 +632,16 @@ def timeline_page():
                     for actor, count in sorted(actor_counts.items(), key=lambda i: i[1], reverse=True)[:15]:
                         st.caption(f"- {actor.split('@')[0]} ({count})")
         with col2:
-            st.markdown(f"<div class='storybook-box'>{summary_text}</div>", unsafe_allow_html=True)
+            # Display the fully formatted HTML summary
+            st.markdown(f"<div class='storybook-box'>{final_html_summary}</div>", unsafe_allow_html=True)
 
         st.subheader(f"Communication Network for '{selected_title}'")
         with st.spinner("Generating network..."):
-            network_html = generate_narrative_network_graph(selected_title, list(actor_counts.keys()))
-            if network_html: components.html(network_html, height=610)
+            # Use the original full actor list for the network graph
+            all_actors_for_network = list(actor_counts.keys())
+            network_html = generate_narrative_network_graph(selected_title, all_actors_for_network)
+            if network_html:
+                components.html(network_html, height=610)
 
 
 # --- MAIN ROUTER ---
