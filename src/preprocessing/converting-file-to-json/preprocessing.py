@@ -2,7 +2,7 @@ import os  # For file and directory operations
 import re  # For regular expressions
 import json  # For reading and writing JSON
 import natsort  # For natural sorting of filenames
-from src.config.config import UNZIP_DIR, REFINED_JSON_PATH  # Import config paths
+from src.config.config import UNZIP_DIR, CLEANED_JSON_PATH  # Import config paths
 from src.config.logging_config import setup_logger  # Import logger setup
 
 logger = setup_logger(__name__)  # Initialize logger
@@ -83,4 +83,4 @@ def extract_emails_to_json(base_output_path):
         logger.error(f"❌ Failed to save output JSON: {e}")
 
 if __name__ == "__main__":
-    extract_emails_to_json(REFINED_JSON_PATH)  # Run extraction if script is executed
+    extract_emails_to_json(CLEANED_JSON_PATH)  # Run extraction if script is executed

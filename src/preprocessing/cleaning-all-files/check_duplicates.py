@@ -2,7 +2,7 @@ import os
 import hashlib
 import logging
 from src.config.config import LOG_FILE_PATH
-from src.preprocessing.Converting_File_To_JSON.dataset_setup import unzip_once
+from src.preprocessing.dataset_setup import unzip_once
 
 # Setup logging to 'log/duplicates_process_log.txt' under project root
 LOGGING_PATH = os.path.join(os.path.dirname(LOG_FILE_PATH), 'duplicates_process_log.txt')

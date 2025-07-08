@@ -2,7 +2,7 @@ import json
 import re
 import logging
 from typing import List, Dict, Tuple, Any
-from src.config.config import CLEANED_JSON_PATH, BODY_CHAIN_OUTPUT_PATH
+from src.config.config import CLEANED_JSON_PATH, CLEANED_BODYCHAIN_JSON_PATH
 
 logging.basicConfig(
     level=logging.INFO,
@@ -253,5 +253,5 @@ def process_first_n_emails(input_path: str, output_path: str) -> None:
 if __name__ == "__main__":
     process_first_n_emails(
         input_path=CLEANED_JSON_PATH,
-        output_path=BODY_CHAIN_OUTPUT_PATH
+        output_path=CLEANED_BODYCHAIN_JSON_PATH
     )

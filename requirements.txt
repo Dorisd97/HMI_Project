@@ -11,3 +11,4 @@ pyvis
 plotly
 matplotlib
 streamlit_agraph
+natsort

@@ -2,10 +2,11 @@ import json  # Import JSON module for parsing and writing JSON data
 import re  # Import regex module for pattern matching
 import ollama  # Import Ollama for LLM interaction
 from typing import Dict, List, Any  # Import typing for type hints
-from src.config import config  # Import config for file paths
 
-INPUT_FILE = config.CLEANED_BODY_CHAIN_JSON_PATH  # Input JSON file path from config
-OUTPUT_FILE = config.PROCESSED_JSON_OUTPUT  # Output JSON file path from config
+from src.config.config import CLEANED_BODYCHAIN_JSON_PATH, PROCESSED_JSON_OUTPUT
+
+INPUT_FILE = CLEANED_BODYCHAIN_JSON_PATH # Input JSON file path from config
+OUTPUT_FILE = PROCESSED_JSON_OUTPUT  # Output JSON file path from config
 MAX_EMAILS = 7220  # Process only first N emails
 BATCH_SIZE = 10  # Process emails in batches of N
 
