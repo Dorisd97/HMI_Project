@@ -1,19 +1,19 @@
-import streamlit as st
-import pandas as pd
-import re
-from pyvis.network import Network
-import streamlit.components.v1 as components
-import os
-from collections import Counter
-import plotly.express as px
-import pickle
-import numpy as np
-import matplotlib.pyplot as plt
-import json
+import streamlit as st  # Streamlit for web app UI
+import pandas as pd  # DataFrame operations
+import re  # Regular expressions
+from pyvis.network import Network  # Network visualization
+import streamlit.components.v1 as components  # For embedding HTML
+import os  # OS operations
+from collections import Counter  # Counting elements
+import plotly.express as px  # Plotly for charts
+import pickle  # For loading/saving Python objects
+import numpy as np  # Numerical operations
+import matplotlib.pyplot as plt  # Matplotlib for plotting
+import json  # JSON file operations
 
-from itertools import combinations
+from itertools import combinations  # For generating combinations
 
-from src.config.config import ENRON_LOGO, PROCESSED_JSON_OUTPUT, CLUSTER_STORIES, THEMATIC_STORIES, PICKLE_DIR
+from src.config.config import ENRON_LOGO, PROCESSED_JSON_OUTPUT, CLUSTER_STORIES, THEMATIC_STORIES, PICKLE_DIR  # Config imports
 
 # --- Configuration Setup ---
 # The original config import is commented out to make this script self-contained.
@@ -21,17 +21,16 @@ from src.config.config import ENRON_LOGO, PROCESSED_JSON_OUTPUT, CLUSTER_STORIES
 
 # --- Paths are defined directly here. ---
 # Ensure these files are in the same directory as your script or provide the correct path.
-ENRON_LOGO = ENRON_LOGO  # A placeholder name for your logo image
+ENRON_LOGO = ENRON_LOGO  # Path to logo image
 PICKLE_DIR = PICKLE_DIR  # Directory for .pkl files
-PROCESSED_JSON_OUTPUT = PROCESSED_JSON_OUTPUT  # Required for the Dashboard page
-# This JSON is the source for the new Network page and the AI Summary
-CACHED_CLUSTER_STORIES = CLUSTER_STORIES
-THEMATIC_STORIES = THEMATIC_STORIES
+PROCESSED_JSON_OUTPUT = PROCESSED_JSON_OUTPUT  # Main processed JSON file
+CACHED_CLUSTER_STORIES = CLUSTER_STORIES  # Cluster stories JSON
+THEMATIC_STORIES = THEMATIC_STORIES  # Thematic stories JSON
 
 
 def call_app_helper():
     # Import your helper methods here, assuming it's located in app_helper.py
-    from app_helper import generate_data  # Modify this with actual function name from app_helper
+    from src.app_helper.pickel_generator import generate_data  # Import the data generation function
 
     # Call the helper function to generate required data
     generate_data()
@@ -39,9 +38,9 @@ def call_app_helper():
 
 # --- Advanced Analysis Imports ---
 try:
-    from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-    from sklearn.decomposition import LatentDirichletAllocation
-    from minisom import MiniSom
+    from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer  # Text vectorization
+    from sklearn.decomposition import LatentDirichletAllocation  # Topic modeling
+    from minisom import MiniSom  # Self-Organizing Map
 
     ADVANCED_ANALYSIS_AVAILABLE = True
 except ImportError:
@@ -49,8 +48,8 @@ except ImportError:
 
 # --- LangChain & Ollama Imports ---
 try:
-    from langchain_community.chat_models import ChatOllama
-    from langchain.schema import HumanMessage
+    from langchain_community.chat_models import ChatOllama  # Ollama LLM
+    from langchain.schema import HumanMessage  # Message schema
 
     LANGCHAIN_AVAILABLE = True
 except ImportError:
@@ -58,10 +57,10 @@ except ImportError:
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="The Enron Files: A Narrative Investigation",
-    page_icon="📖",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="The Enron Files: A Narrative Investigation",  # App title
+    page_icon="📖",  # App icon
+    layout="wide",  # Wide layout
+    initial_sidebar_state="expanded"  # Sidebar expanded by default
 )
 
 
@@ -82,7 +81,7 @@ def load_precomputed_pkl(file_name):
     path = os.path.join(PICKLE_DIR, file_name)
     if not os.path.exists(path):
         print(f"Pickle file {file_name} not found. Calling helper to regenerate data.")
-        call_app_helper()  # Call the helper function to generate the data
+        call_app_helper()  # Generate data if missing
         if os.path.exists(path):
             print(f"Pickle file {file_name} generated successfully.")
         else:
@@ -145,17 +144,45 @@ def generate_llm_summary(file_path):
         llm = ChatOllama(model="mistral")
 
         prompt = f"""
-        As a financial investigator analyzing the Enron scandal, your task is to provide a high-level executive summary based on the provided text, which is a collection of automatically generated stories from Enron's emails.
+        **Your Persona:** You are a master storyteller and corporate historian. Your expertise lies in synthesizing complex, fragmented information into a single, compelling, and historically accurate narrative.
 
-        Your summary should:
-        1.  Identify the main recurring themes (e.g., financial manipulation, regulatory issues, the Dynegy merger).
-        2.  Name the key companies and individuals who appear frequently.
-        3.  Describe the general timeline or progression of events as depicted in the stories.
-        4.  Conclude with a synthesis of the key events that led to Enron's downfall, according to this specific text.
+        **Your Task:** Analyze the provided context, which is a large text file containing over 100 individual stories, each summarizing a "theme" from the Enron email dataset. Your goal is to synthesize these disparate stories into a single, cohesive, and epic narrative chronicling the rise and fall of Enron.
 
-        Keep the summary concise and professional, suitable for a case overview.
+        **Important Context on the Input Data:** The provided text is not a single document. It is a compilation of over 100 thematically grouped summaries. These summaries may overlap, repeat information, and cover different time periods and actors. Your primary challenge is to connect the dots, de-duplicate information, and build one overarching chronological narrative from these fragments.
 
-        CONTEXT:
+        **Instructions for the Narrative:**
+        1.  **Identify the Overarching Timeline:** Piece together the events chronologically, from the early signs of strategic maneuvering in California and the Dynegy merger talks to the final collapse and its aftermath.
+        2.  **Weave a Cohesive Story:** Do not simply list facts or themes. Create a story with a clear **beginning** (the peak of Enron's power and early manipulative strategies), a **middle** (the desperate attempts to maintain the façade, like the Dynegy merger), and a **climax** (the rapid unraveling and bankruptcy).
+        3.  **Incorporate Key Themes:** Seamlessly integrate the recurring themes from the source text—such as the California energy crisis, the secretive Dynegy merger negotiations, manipulation of regulatory bodies (FERC, CPUC), deceptive accounting practices (hidden files, SPEs), and the internal culture of secrecy—into the narrative.
+        4.  **Tone:** Use a compelling, journalistic, and slightly dramatic tone to capture the scale of the corporate tragedy. Use phrases that evoke a sense of a "house of cards" or a "dance of deception."
+
+        **Required Output Format:**
+        You MUST structure your response using the exact following Markdown format and headings:
+
+        ---
+        ### **Title: [Create a compelling, dramatic title for the story]**
+
+        ### **Key Actors:**
+        *   **Enron Executives:** [List the key executives]
+        *   **Corporate Entities:** [List the key companies and partners]
+        *   **Regulatory & Government Bodies:** [List the key agencies and political figures]
+
+        ### **The Story**
+
+        #### **The Beginning: [Create a subtitle for the first phase of the story, e.g., A Web of Power and Profit]**
+        [Write the first part of the narrative here, covering Enron's peak and the initial signs of trouble.]
+
+        #### **The Middle: [Create a subtitle for the second phase, e.g., The Desperate Dance]**
+        [Write the middle part of the narrative, focusing on the escalating problems and major events like the Dynegy merger attempt.]
+
+        #### **The Climax: [Create a subtitle for the final phase, e.g., The House of Cards Collapses]**
+        [Write the climax of the story, detailing the company's rapid downfall, bankruptcy, and the reasons why.]
+
+        #### **The Conclusion: [Use a subtitle like Fallout and Legacy]**
+        [Conclude the story by summarizing the immediate fallout (bankruptcy, trials) and the long-term legacy of the scandal (e.g., Sarbanes-Oxley Act).]
+        ---
+
+        **CONTEXT TO ANALYZE:**
         ---
         {context}
         ---
