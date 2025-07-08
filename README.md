@@ -43,8 +43,29 @@ data/                     # Raw and processed data files
    ```
 
 3. **(Optional) Set up Ollama for local LLMs:**
-   - Download and install [Ollama](https://ollama.com/).
-   - Start the Ollama server and pull the required model (e.g., `mistral`).
+
+   **Install Ollama:**
+
+   - **Windows:**  
+     Download and run the installer from [https://ollama.com/download](https://ollama.com/download).
+
+   - **macOS:**  
+     Download and run the installer from [https://ollama.com/download](https://ollama.com/download)  
+     or install via Homebrew:  
+     ```bash
+     brew install ollama
+     ```
+
+   - **Linux:**  
+     Run the following command in your terminal:  
+     ```bash
+     curl -fsSL https://ollama.com/install.sh | sh
+     ```
+
+   **Start the Ollama server and pull the required model (e.g., `mistral`):**
+   ```bash
+   ollama run mistral
+   ```
 
 4. **Prepare data:**
    - Place the required data files (JSON, pickle, etc.) in the appropriate directories as specified in `src/config/config.py`.
@@ -76,4 +97,3 @@ This project is for educational and research purposes.
 - [Streamlit](https://streamlit.io/)
 - [LangChain](https://python.langchain.com/)
 - [Ollama](https://ollama.com/)
-
