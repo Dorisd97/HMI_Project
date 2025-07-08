@@ -10,3 +10,4 @@ streamlit
 pyvis
 plotly
 matplotlib
+streamlit_agraph

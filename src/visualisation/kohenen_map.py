@@ -464,7 +464,7 @@ def main():
             st.download_button(
                 label="📊 Download Results CSV",
                 data=csv_buffer.getvalue(),
-                file_name="som_results.csv",
+                file_name="data_generated/som_results.csv",
                 mime="text/csv"
             )
 
@@ -476,7 +476,7 @@ def main():
             st.download_button(
                 label="🧠 Download SOM Weights",
                 data=weights_buffer.getvalue(),
-                file_name="som_weights.npy",
+                file_name="data_generated/som_weights.npy",
                 mime="application/octet-stream"
             )
 
