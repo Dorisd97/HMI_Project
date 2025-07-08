@@ -1,5 +1,6 @@
-[GitHub Repository](https://github.com/Dorisd97/HMI_Project)
+
 # The Enron Files: A Narrative Investigation
+ Link to Github - [GitHub Repository](https://github.com/Dorisd97/HMI_Project)
 
 This project is a Streamlit-based web application for exploring, analyzing, and visualizing the Enron email dataset. It provides interactive dashboards, AI-generated summaries, entity relationship networks, and advanced analytics to support narrative investigations.
 
